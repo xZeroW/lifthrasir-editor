@@ -357,6 +357,22 @@ impl MapDocument {
         Ok((transform.translation, transform.rotation, transform.scale))
     }
 
+    /// Returns the optional glTF node name used to identify a map prop.
+    pub fn prop_node_name(&self, node_index: usize) -> Result<Option<&str>> {
+        let node = self
+            .root
+            .get("nodes")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|nodes| nodes.get(node_index))
+            .with_context(|| format!("map has no node {node_index}"))?;
+        ensure!(
+            node.pointer(&format!("/extras/{}", lif::EXTRAS_PROP))
+                .is_some(),
+            "node {node_index} is not a map prop"
+        );
+        Ok(node.get("name").and_then(serde_json::Value::as_str))
+    }
+
     /// Restores a prop's position from the transform it had when this document
     /// was opened (or when the prop was duplicated).
     pub fn reset_prop_translation(&mut self, node_index: usize) -> Result<()> {
@@ -583,6 +599,19 @@ mod tests {
         assert_eq!(document.scene.props, 1);
         assert_eq!(document.scene.effects, 1);
         assert_eq!(document.scene.audio_emitters, 1);
+    }
+
+    #[test]
+    fn exposes_prop_node_names_for_the_inspector() {
+        let mut map = root(lif::FORMAT_VERSION);
+        map["nodes"][1]["name"] = json!("town fountain");
+        let directory = write_document(map);
+        let document = MapDocument::open(directory.path().join("map.glb")).expect("document");
+
+        assert_eq!(
+            document.prop_node_name(1).expect("prop name"),
+            Some("town fountain")
+        );
     }
 
     #[test]

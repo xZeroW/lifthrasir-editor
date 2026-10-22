@@ -27,7 +27,7 @@ pub(super) fn draw(
     mut open_confirmation: ResMut<MapOpenConfirmation>,
     document: Option<ResMut<EditorDocument>>,
     selected: Res<SelectedProp>,
-    props: Query<(&LifMapNodeIndex, &Transform), With<LifPropRef>>,
+    props: Query<(&LifMapNodeIndex, &Transform, &LifPropRef), With<LifPropRef>>,
     mut snap: ResMut<TransformSnap>,
     mut notice: ResMut<EditorNotice>,
     mut exit: MessageWriter<AppExit>,
@@ -82,11 +82,11 @@ pub(super) fn draw(
 fn prop_transform_window(
     ui: &Ui,
     selected: &SelectedProp,
-    props: &Query<(&LifMapNodeIndex, &Transform), With<LifPropRef>>,
+    props: &Query<(&LifMapNodeIndex, &Transform, &LifPropRef), With<LifPropRef>>,
     document: Option<&mut ResMut<EditorDocument>>,
     snap: &mut TransformSnap,
 ) {
-    ui.window("Prop Transform")
+    ui.window("Prop Inspector")
         .position([18.0, 320.0], Condition::FirstUseEver)
         .flags(WindowFlags::ALWAYS_AUTO_RESIZE)
         .build(|| {
@@ -102,13 +102,27 @@ fn prop_transform_window(
                 ui.text_disabled("Select a prop to edit its transform.");
                 return;
             };
-            let Ok((node, transform)) = props.get(entity) else {
+            let Ok((node, transform, prop)) = props.get(entity) else {
                 ui.text_disabled("The selected prop is no longer available.");
                 return;
             };
             let Some(document) = document else {
                 return;
             };
+            ui.text(format!(
+                "Node: {}",
+                document
+                    .0
+                    .prop_node_name(node.0)
+                    .ok()
+                    .flatten()
+                    .unwrap_or("(unnamed)")
+            ));
+            ui.text_wrapped(format!("Model: {}", prop.0.model));
+            ui.text(format!("Animation type: {}", prop.0.anim_type));
+            ui.text(format!("Animation speed: {:.3}", prop.0.anim_speed));
+            ui.separator();
+            ui.text("Transform");
             let mut translation = transform.translation.to_array();
             let (yaw, pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
             let mut rotation = [yaw.to_degrees(), pitch.to_degrees(), roll.to_degrees()];

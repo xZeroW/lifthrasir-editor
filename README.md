@@ -64,7 +64,7 @@ is no autosave.
 - `G` / `R`: translate / rotate gizmo mode
 - `I/K`, `J/L`, `U/O`: move along Z, X, Y
 - `Q/E`: rotate around Y
-- Use **Prop Transform** to snap gizmo drags, enter transforms numerically, or reset position, rotation, and scale.
+- Use **Prop Inspector** to view metadata, snap gizmo drags, enter transforms numerically, or reset position, rotation, and scale.
 - `Ctrl+D`: duplicate the selected prop
 - `Delete`: delete the selected prop
 - `Ctrl+Z` / `Ctrl+Y`: undo / redo
@@ -90,7 +90,7 @@ items name the work that remains.
 ### 2. Prop authoring
 - [x] Add a mouse transform gizmo with translate and rotate modes.
 - [x] Add snapping, numeric transform fields, and reset actions. Axis-constrained dragging is implemented.
-- [ ] Add prop metadata panel: node name, model path, transform, animation values.
+- [x] Add prop metadata panel: node name, model path, transform, animation values.
 - [x] Add duplicate prop operations.
 - [ ] Add replace-model operations.
 - [ ] Add a searchable converted-model browser.
