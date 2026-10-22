@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use lifthrasir_data::lif::{self, LifCollisionCell, LifEditor, LifMap, LifWater};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 mod persistence;
@@ -20,6 +20,7 @@ pub struct MapDocument {
     undo: Vec<DocumentEdit>,
     redo: Vec<DocumentEdit>,
     pending_prop_transform: Option<PropTransformEdit>,
+    initial_prop_transforms: BTreeMap<usize, NodeTransform>,
     deleted_props: BTreeSet<usize>,
     dirty: bool,
     root: serde_json::Value,
@@ -290,6 +291,7 @@ impl MapDocument {
         write_node_transform(&mut duplicate, transform);
 
         let new_index = nodes.len();
+        self.initial_prop_transforms.insert(new_index, transform);
         self.root
             .get_mut("nodes")
             .and_then(serde_json::Value::as_array_mut)
@@ -355,6 +357,30 @@ impl MapDocument {
         Ok((transform.translation, transform.rotation, transform.scale))
     }
 
+    /// Restores a prop's position from the transform it had when this document
+    /// was opened (or when the prop was duplicated).
+    pub fn reset_prop_translation(&mut self, node_index: usize) -> Result<()> {
+        let initial = self.initial_prop_transform(node_index)?;
+        let (_, rotation, scale) = self.prop_transform(node_index)?;
+        self.set_prop_transform(node_index, initial.translation, rotation, scale)
+    }
+
+    /// Restores a prop's rotation from the transform it had when this document
+    /// was opened (or when the prop was duplicated).
+    pub fn reset_prop_rotation(&mut self, node_index: usize) -> Result<()> {
+        let initial = self.initial_prop_transform(node_index)?;
+        let (translation, _, scale) = self.prop_transform(node_index)?;
+        self.set_prop_transform(node_index, translation, initial.rotation, scale)
+    }
+
+    /// Restores a prop's scale from the transform it had when this document
+    /// was opened (or when the prop was duplicated).
+    pub fn reset_prop_scale(&mut self, node_index: usize) -> Result<()> {
+        let initial = self.initial_prop_transform(node_index)?;
+        let (translation, rotation, _) = self.prop_transform(node_index)?;
+        self.set_prop_transform(node_index, translation, rotation, initial.scale)
+    }
+
     fn apply_edit(&mut self, edit: DocumentEdit, forward: bool) {
         match edit {
             DocumentEdit::Collision {
@@ -393,6 +419,13 @@ impl MapDocument {
             .and_then(serde_json::Value::as_array_mut)
             .and_then(|nodes| nodes.get_mut(node_index))
             .with_context(|| format!("map has no node {node_index}"))
+    }
+
+    fn initial_prop_transform(&self, node_index: usize) -> Result<NodeTransform> {
+        self.initial_prop_transforms
+            .get(&node_index)
+            .copied()
+            .with_context(|| format!("map has no initial transform for prop node {node_index}"))
     }
 }
 
@@ -686,6 +719,32 @@ mod tests {
         assert_eq!(
             document.root.pointer("/nodes/1/translation"),
             Some(&json!([4.0, 5.0, 6.0]))
+        );
+    }
+
+    #[test]
+    fn prop_reset_actions_restore_the_opened_map_transform() {
+        let mut map = root(lif::FORMAT_VERSION);
+        map["nodes"][1]["translation"] = json!([100.0, 20.0, -30.0]);
+        map["nodes"][1]["rotation"] = json!([0.0, 0.5, 0.0, 0.8660254]);
+        map["nodes"][1]["scale"] = json!([2.0, 3.0, 4.0]);
+        let directory = write_document(map);
+        let mut document = MapDocument::open(directory.path().join("map.glb")).expect("document");
+        document
+            .set_prop_transform(1, [1.0; 3], [0.0, 0.0, 0.0, 1.0], [1.0; 3])
+            .expect("edit prop");
+
+        document.reset_prop_translation(1).expect("reset position");
+        document.reset_prop_rotation(1).expect("reset rotation");
+        document.reset_prop_scale(1).expect("reset scale");
+
+        assert_eq!(
+            document.prop_transform(1).expect("transform"),
+            (
+                [100.0, 20.0, -30.0],
+                [0.0, 0.5, 0.0, 0.8660254],
+                [2.0, 3.0, 4.0],
+            )
         );
     }
 

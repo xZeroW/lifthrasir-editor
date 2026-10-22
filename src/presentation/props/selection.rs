@@ -1,38 +1,15 @@
-use bevy::prelude::*;
+use bevy::{camera::primitives::Aabb, prelude::*};
 
-use super::SelectedProp;
+use super::{SelectedProp, SelectionOutlineStyle};
 use crate::{application::EditorSystems, infrastructure::content::LifPropRef};
-
-#[derive(Component)]
-struct PropCursor;
 
 pub(super) struct PropSelectionPlugin;
 
 impl Plugin for PropSelectionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup)
-            .add_observer(select_prop)
-            .add_systems(Update, sync_prop_cursor.in_set(EditorSystems::Present));
+        app.add_observer(select_prop)
+            .add_systems(Update, draw_prop_selection.in_set(EditorSystems::Present));
     }
-}
-
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    commands.spawn((
-        PropCursor,
-        Visibility::Hidden,
-        Mesh3d(meshes.add(Cuboid::new(12.0, 12.0, 12.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgba(1.0, 0.9, 0.05, 0.45),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            ..default()
-        })),
-        Transform::default(),
-    ));
 }
 
 /// Meshes are nested beneath the map prop, so walk up the owning hierarchy.
@@ -59,22 +36,58 @@ fn select_prop(
     }
 }
 
-fn sync_prop_cursor(
+fn draw_prop_selection(
     selected: Res<SelectedProp>,
-    props: Query<&GlobalTransform, With<LifPropRef>>,
-    mut cursors: Query<(&mut Transform, &mut Visibility), With<PropCursor>>,
+    props: Query<(), With<LifPropRef>>,
+    children: Query<&Children>,
+    bounds: Query<(&GlobalTransform, &Aabb)>,
+    style: Res<SelectionOutlineStyle>,
+    mut gizmos: Gizmos,
 ) {
-    let Ok((mut cursor, mut visibility)) = cursors.single_mut() else {
-        return;
-    };
     let Some(entity) = selected.0 else {
-        *visibility = Visibility::Hidden;
         return;
     };
-    let Ok(transform) = props.get(entity) else {
-        *visibility = Visibility::Hidden;
+    if !props.contains(entity) {
+        return;
+    }
+    let Some((minimum, maximum)) = prop_bounds(entity, &children, &bounds) else {
         return;
     };
-    cursor.translation = transform.translation();
-    *visibility = Visibility::Visible;
+    let padding = Vec3::splat(style.padding.max(0.0));
+    let size = (maximum - minimum) + padding * 2.0;
+    gizmos.cube(
+        Transform::from_translation((minimum + maximum) * 0.5).with_scale(size),
+        Color::srgb(style.color[0], style.color[1], style.color[2]),
+    );
+}
+
+/// Calculates a world-aligned bounds box from every renderable mesh nested
+/// below the selected prop. This follows the model instead of using the prop
+/// root's pivot, which is often on the terrain below its visible geometry.
+fn prop_bounds(
+    prop: Entity,
+    children: &Query<&Children>,
+    bounds: &Query<(&GlobalTransform, &Aabb)>,
+) -> Option<(Vec3, Vec3)> {
+    let mut minimum = Vec3::splat(f32::INFINITY);
+    let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+    let mut found = false;
+    for entity in std::iter::once(prop).chain(children.iter_descendants(prop)) {
+        let Ok((transform, aabb)) = bounds.get(entity) else {
+            continue;
+        };
+        let center = Vec3::from(aabb.center);
+        let extent = Vec3::from(aabb.half_extents);
+        for x in [-extent.x, extent.x] {
+            for y in [-extent.y, extent.y] {
+                for z in [-extent.z, extent.z] {
+                    let point = transform.transform_point(center + Vec3::new(x, y, z));
+                    minimum = minimum.min(point);
+                    maximum = maximum.max(point);
+                    found = true;
+                }
+            }
+        }
+    }
+    found.then_some((minimum, maximum))
 }

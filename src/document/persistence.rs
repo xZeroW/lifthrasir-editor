@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{MapDocument, MapSceneSummary, compact_deleted_props};
+use super::{MapDocument, MapSceneSummary, compact_deleted_props, node_transform};
 
 impl MapDocument {
     /// Opens a converted map GLB and validates the editable LIF payload.
@@ -86,6 +86,7 @@ impl MapDocument {
             undo: Vec::new(),
             redo: Vec::new(),
             pending_prop_transform: None,
+            initial_prop_transforms: initial_prop_transforms(root)?,
             deleted_props: BTreeSet::new(),
             dirty: false,
             root: root.clone(),
@@ -93,6 +94,22 @@ impl MapDocument {
             bin_chunk,
         })
     }
+}
+
+fn initial_prop_transforms(
+    root: &serde_json::Value,
+) -> Result<std::collections::BTreeMap<usize, super::NodeTransform>> {
+    root.get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .context("map has no nodes")?
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| {
+            node.pointer(&format!("/extras/{}", lif::EXTRAS_PROP))
+                .is_some()
+        })
+        .map(|(index, node)| Ok((index, node_transform(node)?)))
+        .collect()
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {

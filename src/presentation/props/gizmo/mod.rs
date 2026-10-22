@@ -2,7 +2,7 @@ mod view;
 
 use bevy::prelude::*;
 
-use super::SelectedProp;
+use super::{SelectedProp, TransformSnap};
 use crate::{
     application::{EditorDocument, EditorSystems, control_pressed},
     infrastructure::content::{LifMapNodeIndex, LifPropRef},
@@ -19,7 +19,15 @@ enum GizmoMode {
 #[derive(Resource, Default)]
 struct PropGizmo {
     mode: GizmoMode,
-    drag: Option<(Entity, Entity)>,
+    drag: Option<GizmoDrag>,
+}
+
+#[derive(Clone, Copy)]
+struct GizmoDrag {
+    axis: Entity,
+    prop: Entity,
+    initial: Transform,
+    amount: f32,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -60,6 +68,7 @@ fn switch_gizmo_mode(keys: Res<ButtonInput<KeyCode>>, mut gizmo: ResMut<PropGizm
 fn gizmo_drag_start(
     drag: On<Pointer<DragStart>>,
     axes: Query<&GizmoAxis>,
+    props: Query<&Transform, With<LifPropRef>>,
     selected: Res<SelectedProp>,
     mut state: ResMut<PropGizmo>,
     capture: Option<Res<dear_imgui_bevy::prelude::ImguiInputCapture>>,
@@ -72,7 +81,15 @@ fn gizmo_drag_start(
     }
     let Ok(_) = axes.get(drag.entity) else { return };
     let Some(prop) = selected.0 else { return };
-    state.drag = Some((drag.entity, prop));
+    let Ok(initial) = props.get(prop) else {
+        return;
+    };
+    state.drag = Some(GizmoDrag {
+        axis: drag.entity,
+        prop,
+        initial: *initial,
+        amount: 0.0,
+    });
 }
 
 fn gizmo_drag(
@@ -81,7 +98,8 @@ fn gizmo_drag(
     cameras: Query<&GlobalTransform, With<EditorCamera>>,
     mut props: Query<(&mut Transform, &LifMapNodeIndex), With<LifPropRef>>,
     document: Option<ResMut<EditorDocument>>,
-    state: Res<PropGizmo>,
+    mut state: ResMut<PropGizmo>,
+    snap: Res<TransformSnap>,
     capture: Option<Res<dear_imgui_bevy::prelude::ImguiInputCapture>>,
 ) {
     if crate::presentation::ui::pointer_captured(capture.as_deref()) {
@@ -93,17 +111,18 @@ fn gizmo_drag(
     if drag.button != PointerButton::Primary {
         return;
     }
-    let Some((axis_entity, prop_entity)) = state.drag else {
+    let mode = state.mode;
+    let Some(drag_state) = state.drag.as_mut() else {
         return;
     };
-    if axis_entity != drag.entity {
+    if drag_state.axis != drag.entity {
         return;
     }
     let Ok(axis) = axes.get(drag.entity) else {
         return;
     };
     let Ok(camera) = cameras.single() else { return };
-    let Ok((mut transform, node)) = props.get_mut(prop_entity) else {
+    let Ok((mut transform, node)) = props.get_mut(drag_state.prop) else {
         return;
     };
     let axis = axis.axis;
@@ -115,10 +134,14 @@ fn gizmo_drag(
     } else {
         0.0
     };
-    if state.mode == GizmoMode::Translate {
-        transform.translation += axis * amount;
+    drag_state.amount += amount;
+    if mode == GizmoMode::Translate {
+        transform.translation = drag_state.initial.translation
+            + axis * snapped_translation_amount(drag_state.amount, &snap);
     } else {
-        transform.rotation = Quat::from_axis_angle(axis, amount * 0.025) * transform.rotation;
+        transform.rotation =
+            Quat::from_axis_angle(axis, snapped_rotation_amount(drag_state.amount, &snap))
+                * drag_state.initial.rotation;
     }
     if let Err(error) = document.0.update_prop_transform(
         node.0,
@@ -141,12 +164,32 @@ fn gizmo_drag_end(
     if drag.button != PointerButton::Primary {
         return;
     }
-    let Some((axis, _)) = state.drag else { return };
-    if axis != drag.entity {
+    let Some(drag_state) = state.drag else {
+        return;
+    };
+    if drag_state.axis != drag.entity {
         return;
     }
     state.drag = None;
     document.0.commit_pending_prop_transform();
+}
+
+fn snapped_translation_amount(amount: f32, snap: &TransformSnap) -> f32 {
+    if snap.enabled && snap.translation_step > f32::EPSILON {
+        (amount / snap.translation_step).round() * snap.translation_step
+    } else {
+        amount
+    }
+}
+
+fn snapped_rotation_amount(amount: f32, snap: &TransformSnap) -> f32 {
+    let radians = amount * 0.025;
+    let step = snap.rotation_degrees.to_radians();
+    if snap.enabled && step > f32::EPSILON {
+        (radians / step).round() * step
+    } else {
+        radians
+    }
 }
 
 #[cfg(test)]
@@ -176,7 +219,12 @@ mod tests {
         app.insert_resource(EditorDocument(document))
             .insert_resource(PropGizmo {
                 mode: GizmoMode::Translate,
-                drag: Some((axis, prop)),
+                drag: Some(GizmoDrag {
+                    axis,
+                    prop,
+                    initial: Transform::default(),
+                    amount: 0.0,
+                }),
             })
             .add_observer(gizmo_drag_end);
         for button in [PointerButton::Secondary, PointerButton::Primary] {
@@ -229,5 +277,16 @@ mod tests {
             app.world().resource::<PropGizmo>().mode,
             GizmoMode::Translate
         );
+    }
+
+    #[test]
+    fn snapping_rounds_gizmo_drag_amounts_to_configured_increments() {
+        let snap = TransformSnap {
+            enabled: true,
+            translation_step: 5.0,
+            rotation_degrees: 15.0,
+        };
+        assert_eq!(snapped_translation_amount(2.6, &snap), 5.0);
+        assert!((snapped_rotation_amount(12.0, &snap) - 15.0f32.to_radians()).abs() < 0.0001);
     }
 }

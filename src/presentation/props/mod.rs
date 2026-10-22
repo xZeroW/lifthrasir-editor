@@ -10,13 +10,47 @@ use crate::{
 };
 
 #[derive(Resource, Default)]
-struct SelectedProp(Option<Entity>);
+pub(crate) struct SelectedProp(pub(crate) Option<Entity>);
+
+#[derive(Resource)]
+pub(crate) struct TransformSnap {
+    pub enabled: bool,
+    pub translation_step: f32,
+    pub rotation_degrees: f32,
+}
+
+impl Default for TransformSnap {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            translation_step: 5.0,
+            rotation_degrees: 15.0,
+        }
+    }
+}
+
+#[derive(Resource)]
+pub(crate) struct SelectionOutlineStyle {
+    pub color: [f32; 3],
+    pub padding: f32,
+}
+
+impl Default for SelectionOutlineStyle {
+    fn default() -> Self {
+        Self {
+            color: [0.95, 0.1, 0.1],
+            padding: 1.0,
+        }
+    }
+}
 
 pub(super) struct PropEditorPlugin;
 
 impl Plugin for PropEditorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SelectedProp>()
+            .init_resource::<TransformSnap>()
+            .init_resource::<SelectionOutlineStyle>()
             .add_plugins((selection::PropSelectionPlugin, gizmo::PropGizmoPlugin))
             .add_systems(
                 Update,

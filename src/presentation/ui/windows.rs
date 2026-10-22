@@ -1,7 +1,7 @@
 //! Immediate-mode drawing; document/file operations stay in their own modules.
 use bevy::prelude::*;
 use dear_imgui_bevy::prelude::ImguiFrame;
-use dear_imgui_rs::{Condition, Ui, WindowFlags};
+use dear_imgui_rs::{Condition, TreeNodeFlags, Ui, WindowFlags};
 
 use super::{
     EditorUiState,
@@ -12,6 +12,8 @@ use super::{
 };
 use crate::{
     application::{EditorDocument, EditorNotice, save},
+    infrastructure::content::{LifMapNodeIndex, LifPropRef},
+    presentation::props::{SelectedProp, SelectionOutlineStyle, TransformSnap},
     presentation::terrain_grid::TerrainGridStyle,
 };
 
@@ -19,10 +21,14 @@ pub(super) fn draw(
     frame: ImguiFrame<'_>,
     mut state: ResMut<EditorUiState>,
     mut style: ResMut<TerrainGridStyle>,
+    mut selection_style: ResMut<SelectionOutlineStyle>,
     mut picker: ResMut<MapFilePicker>,
     mut open_request: ResMut<MapOpenRequest>,
     mut open_confirmation: ResMut<MapOpenConfirmation>,
     document: Option<ResMut<EditorDocument>>,
+    selected: Res<SelectedProp>,
+    props: Query<(&LifMapNodeIndex, &Transform), With<LifPropRef>>,
+    mut snap: ResMut<TransformSnap>,
     mut notice: ResMut<EditorNotice>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -61,10 +67,96 @@ pub(super) fn draw(
             state.settings_open = true;
         }
     });
-    settings_window(ui, &mut state.settings_open, &mut style);
+    settings_window(
+        ui,
+        &mut state.settings_open,
+        &mut style,
+        &mut selection_style,
+    );
     unsaved_changes_dialog(ui, &mut open_request, &mut open_confirmation);
+    prop_transform_window(ui, &selected, &props, document.as_mut(), &mut snap);
     controls_window(ui);
     notice_window(ui, &notice.message);
+}
+
+fn prop_transform_window(
+    ui: &Ui,
+    selected: &SelectedProp,
+    props: &Query<(&LifMapNodeIndex, &Transform), With<LifPropRef>>,
+    document: Option<&mut ResMut<EditorDocument>>,
+    snap: &mut TransformSnap,
+) {
+    ui.window("Prop Transform")
+        .position([18.0, 320.0], Condition::FirstUseEver)
+        .flags(WindowFlags::ALWAYS_AUTO_RESIZE)
+        .build(|| {
+            ui.checkbox("Snap gizmo", &mut snap.enabled);
+            ui.same_line();
+            ui.input_float("Move step", &mut snap.translation_step);
+            ui.input_float("Rotate step (degrees)", &mut snap.rotation_degrees);
+            snap.translation_step = snap.translation_step.max(0.01);
+            snap.rotation_degrees = snap.rotation_degrees.max(0.1);
+            ui.separator();
+
+            let Some(entity) = selected.0 else {
+                ui.text_disabled("Select a prop to edit its transform.");
+                return;
+            };
+            let Ok((node, transform)) = props.get(entity) else {
+                ui.text_disabled("The selected prop is no longer available.");
+                return;
+            };
+            let Some(document) = document else {
+                return;
+            };
+            let mut translation = transform.translation.to_array();
+            let (yaw, pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
+            let mut rotation = [yaw.to_degrees(), pitch.to_degrees(), roll.to_degrees()];
+            let mut scale = transform.scale.to_array();
+            let translation_changed = ui.input_float3("Position", &mut translation).build();
+            let translation_finished = ui.is_item_deactivated_after_edit();
+            let rotation_changed = ui.input_float3("Rotation", &mut rotation).build();
+            let rotation_finished = ui.is_item_deactivated_after_edit();
+            let scale_changed = ui.input_float3("Scale", &mut scale).build();
+            let scale_finished = ui.is_item_deactivated_after_edit();
+            let changed = translation_changed || rotation_changed || scale_changed;
+            if changed {
+                let rotation = Quat::from_euler(
+                    EulerRot::YXZ,
+                    rotation[0].to_radians(),
+                    rotation[1].to_radians(),
+                    rotation[2].to_radians(),
+                );
+                if let Err(error) = document.0.update_prop_transform(
+                    node.0,
+                    translation,
+                    rotation.to_array(),
+                    scale,
+                ) {
+                    error!("editing prop transform: {error:#}");
+                }
+            }
+            if translation_finished || rotation_finished || scale_finished {
+                document.0.commit_pending_prop_transform();
+            }
+            if ui.button("Reset Position") {
+                reset_prop_transform(document.0.reset_prop_translation(node.0));
+            }
+            ui.same_line();
+            if ui.button("Reset Rotation") {
+                reset_prop_transform(document.0.reset_prop_rotation(node.0));
+            }
+            ui.same_line();
+            if ui.button("Reset Scale") {
+                reset_prop_transform(document.0.reset_prop_scale(node.0));
+            }
+        });
+}
+
+fn reset_prop_transform(result: anyhow::Result<()>) {
+    if let Err(error) = result {
+        error!("resetting prop transform: {error:#}");
+    }
 }
 
 fn unsaved_changes_dialog(
@@ -91,26 +183,42 @@ fn unsaved_changes_dialog(
     });
 }
 
-fn settings_window(ui: &Ui, open: &mut bool, style: &mut ResMut<TerrainGridStyle>) {
+fn settings_window(
+    ui: &Ui,
+    open: &mut bool,
+    style: &mut ResMut<TerrainGridStyle>,
+    selection_style: &mut ResMut<SelectionOutlineStyle>,
+) {
     if !*open {
         return;
     }
     ui.window("Settings")
         .opened(open)
         .position([18.0, 42.0], Condition::FirstUseEver)
-        .size([380.0, 240.0], Condition::FirstUseEver)
+        .size([380.0, 280.0], Condition::FirstUseEver)
         .build(|| {
-            ui.text("Terrain grid");
-            ui.separator();
-            // Work on copies: borrowing the resource mutably every frame would
-            // rebuild the grid even when no widget has actually changed.
-            let mut width = style.line_width;
-            if ui.slider("Line thickness", 0.02, 0.3, &mut width) {
-                style.line_width = width;
+            if ui.collapsing_header("Viewport", TreeNodeFlags::DEFAULT_OPEN) {
+                ui.text("Terrain grid");
+                // Work on copies: borrowing the resource mutably every frame would
+                // rebuild the grid even when no widget has actually changed.
+                let mut width = style.line_width;
+                if ui.slider("Line thickness", 0.02, 0.3, &mut width) {
+                    style.line_width = width;
+                }
+                let mut color = style.color;
+                if ui.color_edit3("Line color", &mut color) {
+                    style.color = color;
+                }
             }
-            let mut color = style.color;
-            if ui.color_edit3("Line color", &mut color) {
-                style.color = color;
+            if ui.collapsing_header("Selection", TreeNodeFlags::DEFAULT_OPEN) {
+                let mut color = selection_style.color;
+                if ui.color_edit3("Border color", &mut color) {
+                    selection_style.color = color;
+                }
+                let mut padding = selection_style.padding;
+                if ui.slider("Border padding", 0.0, 50.0, &mut padding) {
+                    selection_style.padding = padding;
+                }
             }
             ui.text_disabled("Changes apply immediately (this session only).");
         });

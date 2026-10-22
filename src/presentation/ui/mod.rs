@@ -13,7 +13,10 @@ use bevy::{
 };
 use dear_imgui_bevy::prelude::*;
 
-use crate::application::{EditorNotice, EditorSystems};
+use crate::{
+    application::{EditorNotice, EditorSystems},
+    presentation::props::{SelectedProp, SelectionOutlineStyle, TransformSnap},
+};
 
 pub(super) use input::{pointer_captured, viewport_input_allowed};
 
@@ -28,6 +31,11 @@ impl Plugin for EditorUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ImguiPlugin::default())
             .init_resource::<EditorUiState>()
+            // The transform window can render before the prop feature is
+            // composed in a headless host; initialize its shared state here.
+            .init_resource::<SelectedProp>()
+            .init_resource::<TransformSnap>()
+            .init_resource::<SelectionOutlineStyle>()
             .init_resource::<files::MapFilePicker>()
             .init_resource::<files::MapOpenRequest>()
             .init_resource::<files::MapOpenConfirmation>()
