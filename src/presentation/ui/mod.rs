@@ -7,7 +7,10 @@ mod windows;
 #[cfg(test)]
 mod tests;
 
-use bevy::prelude::*;
+use bevy::{
+    app::{RunFixedMainLoop, RunFixedMainLoopSystems},
+    prelude::*,
+};
 use dear_imgui_bevy::prelude::*;
 
 use crate::application::{EditorNotice, EditorSystems};
@@ -26,32 +29,26 @@ impl Plugin for EditorUiPlugin {
         app.add_plugins(ImguiPlugin::default())
             .init_resource::<EditorUiState>()
             .init_resource::<files::MapFilePicker>()
+            .configure_sets(Update, EditorSystems::Edit.run_if(viewport_input_allowed))
             .configure_sets(
                 Update,
-                (
-                    EditorSystems::Edit,
-                    EditorSystems::History,
-                    EditorSystems::Save,
-                )
-                    .run_if(viewport_input_allowed),
+                (EditorSystems::History, EditorSystems::Save).run_if(input::shortcuts_allowed),
+            )
+            .add_systems(
+                RunFixedMainLoop,
+                input::sync_camera_input.before(RunFixedMainLoopSystems::BeforeFixedMainLoop),
             )
             .add_systems(
                 Update,
                 (
-                    files::open_file_shortcut.run_if(viewport_input_allowed),
+                    files::open_file_shortcut.run_if(input::shortcuts_allowed),
                     files::poll_map_file_picker,
                     update_notice.in_set(EditorSystems::Present),
                 ),
             );
         let pass = app.imgui_primary_pass().expect("editor ImGui primary pass");
-        app.add_imgui_systems(
-            &pass,
-            (
-                pass.system(windows::draw),
-                pass.system(input::sync_camera_input),
-            ),
-        )
-        .expect("register editor ImGui UI");
+        app.add_imgui_systems(&pass, pass.system(windows::draw))
+            .expect("register editor ImGui UI");
     }
 }
 

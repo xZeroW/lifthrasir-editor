@@ -62,6 +62,7 @@ fn duplicate_selected_prop(
                 LifMapNodeIndex(index),
                 PropSceneContext::default(),
                 duplicate_transform,
+                Visibility::Inherited,
             ));
             notice.show(format!("Duplicated prop (node {index}) — Ctrl+S to save"));
         }
@@ -112,5 +113,132 @@ fn sync_document_props(
         } else {
             Visibility::Inherited
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{application::EditorSessionPlugin, test_support};
+    use lifthrasir_data::lif::LifProp;
+
+    #[test]
+    fn duplicated_props_can_be_undone_redone_deleted_and_restored() {
+        let (_directory, document) = test_support::document();
+        let mut app = App::new();
+        app.insert_resource(EditorDocument(document))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<SelectedProp>()
+            .add_plugins(EditorSessionPlugin)
+            .add_systems(
+                Update,
+                (duplicate_selected_prop, delete_selected_prop)
+                    .chain()
+                    .in_set(EditorSystems::Edit),
+            )
+            .add_systems(Update, sync_document_props.in_set(EditorSystems::Present));
+        let original = app
+            .world_mut()
+            .spawn((
+                LifPropRef(LifProp {
+                    model: "ro://models/tree.glb".into(),
+                    anim_type: 0,
+                    anim_speed: 1.0,
+                }),
+                LifMapNodeIndex(0),
+                Transform::default(),
+                Visibility::Inherited,
+            ))
+            .id();
+        app.world_mut().resource_mut::<SelectedProp>().0 = Some(original);
+        shortcut(&mut app, Some(KeyCode::ControlLeft), KeyCode::KeyD);
+        let (duplicate, index) = app
+            .world_mut()
+            .query::<(Entity, &LifMapNodeIndex)>()
+            .iter(app.world())
+            .find(|(entity, _)| *entity != original)
+            .map(|(entity, node)| (entity, node.0))
+            .unwrap();
+        assert_eq!(
+            app.world().get::<Visibility>(duplicate),
+            Some(&Visibility::Inherited)
+        );
+        assert_eq!(
+            app.world().get::<Transform>(duplicate).unwrap().translation,
+            Vec3::X * 20.0
+        );
+
+        shortcut(&mut app, Some(KeyCode::ControlLeft), KeyCode::KeyZ);
+        assert!(
+            app.world()
+                .resource::<EditorDocument>()
+                .0
+                .prop_deleted(index)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(duplicate),
+            Some(&Visibility::Hidden)
+        );
+        shortcut(&mut app, Some(KeyCode::ControlRight), KeyCode::KeyY);
+        assert!(
+            !app.world()
+                .resource::<EditorDocument>()
+                .0
+                .prop_deleted(index)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(duplicate),
+            Some(&Visibility::Inherited)
+        );
+
+        // Selecting the duplicate, rather than its source, must allow delete.
+        app.world_mut().resource_mut::<SelectedProp>().0 = Some(duplicate);
+        shortcut(&mut app, None, KeyCode::Delete);
+        assert!(
+            app.world()
+                .resource::<EditorDocument>()
+                .0
+                .prop_deleted(index)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(duplicate),
+            Some(&Visibility::Hidden)
+        );
+        shortcut(&mut app, Some(KeyCode::ControlLeft), KeyCode::KeyZ);
+        assert!(
+            !app.world()
+                .resource::<EditorDocument>()
+                .0
+                .prop_deleted(index)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(duplicate),
+            Some(&Visibility::Inherited)
+        );
+        shortcut(&mut app, Some(KeyCode::ControlLeft), KeyCode::KeyY);
+        assert!(
+            app.world()
+                .resource::<EditorDocument>()
+                .0
+                .prop_deleted(index)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(duplicate),
+            Some(&Visibility::Hidden)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(original),
+            Some(&Visibility::Inherited)
+        );
+    }
+
+    fn shortcut(app: &mut App, control: Option<KeyCode>, key: KeyCode) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        if let Some(control) = control {
+            keys.press(control);
+        }
+        keys.press(key);
+        app.update();
     }
 }

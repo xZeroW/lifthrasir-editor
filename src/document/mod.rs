@@ -324,6 +324,13 @@ impl MapDocument {
                 .push(serde_json::json!(new_index));
         }
         self.scene.props += 1;
+        // Keep the node identity for redo, just as deletion does. Undo hides
+        // the newly created prop; saving compacts hidden nodes out of the GLB.
+        self.undo.push(DocumentEdit::PropDeleted {
+            node_index: new_index,
+            before: true,
+            after: false,
+        });
         self.dirty = true;
         self.redo.clear();
         Ok(new_index)
