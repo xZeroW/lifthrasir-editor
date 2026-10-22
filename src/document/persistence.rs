@@ -40,6 +40,7 @@ impl MapDocument {
             let mut bin_chunk = self.bin_chunk.clone();
             bin_chunk[start..end].copy_from_slice(&bytes);
             sync_game_collision(&mut root, &mut bin_chunk, collision, &self.collision_cells)?;
+            self.write_terrain(&mut root, &mut bin_chunk)?;
             let compacted = compact_deleted_props(&root, &self.deleted_props)?;
             let json_chunk =
                 serde_json::to_vec(&compacted).context("serializing edited map JSON")?;
@@ -95,6 +96,8 @@ impl MapDocument {
             root: root.clone(),
             json_chunk,
             bin_chunk,
+            terrain: None,
+            terrain_revision: 0,
         })
     }
 }

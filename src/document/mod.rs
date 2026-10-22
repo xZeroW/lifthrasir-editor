@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 mod persistence;
+mod terrain;
+pub use terrain::TerrainPrimitive;
 
 /// A converted Lifthrasir map opened independently of its Ragnarok sources.
 ///
@@ -26,6 +28,8 @@ pub struct MapDocument {
     root: serde_json::Value,
     json_chunk: Vec<u8>,
     bin_chunk: Vec<u8>,
+    terrain: Option<Vec<TerrainPrimitive>>,
+    terrain_revision: u64,
 }
 
 /// Counts useful to an editor before it materializes a scene.
@@ -40,6 +44,10 @@ pub struct MapSceneSummary {
 
 #[derive(Debug, Clone)]
 enum DocumentEdit {
+    TerrainHeight {
+        vertices: Vec<(usize, usize, f32, f32)>,
+        normals_before: Vec<(usize, Vec<[f32; 3]>)>,
+    },
     Collision {
         index: usize,
         before: LifCollisionCell,
@@ -501,6 +509,19 @@ impl MapDocument {
 
     fn apply_edit(&mut self, edit: &DocumentEdit, forward: bool) {
         match edit {
+            DocumentEdit::TerrainHeight {
+                vertices,
+                normals_before,
+            } => {
+                self.apply_terrain_heights(vertices, forward);
+                if !forward {
+                    for (index, normals) in normals_before {
+                        self.terrain.as_mut().expect("terrain history")[*index]
+                            .normals
+                            .clone_from(normals);
+                    }
+                }
+            }
             DocumentEdit::Collision {
                 index,
                 before,
@@ -673,7 +694,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn root(format_version: u32) -> serde_json::Value {
+    pub(super) fn root(format_version: u32) -> serde_json::Value {
         json!({
             "extensions": {
                 "LIF_map": {
@@ -698,7 +719,7 @@ mod tests {
         })
     }
 
-    fn write_document(root: serde_json::Value) -> tempfile::TempDir {
+    pub(super) fn write_document(root: serde_json::Value) -> tempfile::TempDir {
         let directory = tempfile::tempdir().expect("temp directory");
         let cells = vec![
             LifCollisionCell {

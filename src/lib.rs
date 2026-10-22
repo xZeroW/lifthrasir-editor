@@ -7,5 +7,5 @@
 
 mod document;
 
-pub use document::{MapDocument, MapSceneSummary};
+pub use document::{MapDocument, MapSceneSummary, TerrainPrimitive};
 pub use lifthrasir_data::lif::{LifCollisionCell, LifCollisionFlags};

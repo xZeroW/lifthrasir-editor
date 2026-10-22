@@ -386,8 +386,9 @@ fn terrain_mesh_entities(root: Entity, children: &Query<&Children>) -> Vec<Entit
 }
 
 /// Build ribbons instead of hardware lines so the grid has a consistent width
-/// across renderers. Only horizontal and vertical edges of upward-facing
-/// terrain triangles are retained: diagonals and vertical cliff faces vanish.
+/// across renderers. Upward-facing terrain triangles are clipped to 5x5
+/// collision cells before extracting edges, so the lines match brush selection
+/// rather than the coarser visual terrain tiles. Diagonals and cliffs vanish.
 fn terrain_grid_mesh(sources: Vec<(&Mesh, &GlobalTransform)>, line_width: f32) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
@@ -446,11 +447,35 @@ fn add_terrain_edges(
         if (b - a).cross(c - a).y <= 0.001 {
             continue;
         }
-        for (start, end) in [(a, b), (b, c), (c, a)] {
-            if (start.x - end.x).abs() > 0.001 && (start.z - end.z).abs() > 0.001 {
-                continue;
+        let minimum = a.min(b).min(c);
+        let maximum = a.max(b).max(c);
+        let size = super::viewport::CELL_SIZE;
+        for y in (-maximum.z / size).floor() as i32..(-minimum.z / size).ceil() as i32 {
+            for x in (minimum.x / size).floor() as i32..(maximum.x / size).ceil() as i32 {
+                let mut polygon = vec![a, b, c];
+                for (axis, boundary, greater) in [
+                    (0, x as f32 * size, true),
+                    (0, (x + 1) as f32 * size, false),
+                    (2, -(y + 1) as f32 * size, true),
+                    (2, -y as f32 * size, false),
+                ] {
+                    polygon = clip_polygon(&polygon, axis, boundary, greater);
+                }
+                if polygon.len() < 3 {
+                    continue;
+                }
+                for index in 0..polygon.len() {
+                    let start = polygon[index];
+                    let end = polygon[(index + 1) % polygon.len()];
+                    if (start.x - end.x).abs() > 0.001 && (start.z - end.z).abs() > 0.001 {
+                        continue;
+                    }
+                    if (end - start).xz().length_squared() < 0.000001 {
+                        continue;
+                    }
+                    add_grid_edge(seen, positions, normals, indices, line_width, start, end);
+                }
             }
-            add_grid_edge(seen, positions, normals, indices, line_width, start, end);
         }
     }
 }
@@ -507,6 +532,41 @@ fn toggle_terrain_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ten_unit_terrain_tile_has_four_five_unit_grid_cells() {
+        let mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            vec![
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [10.0, 4.0, -10.0],
+                [0.0, 4.0, -10.0],
+            ],
+        )
+        .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
+        let grid = terrain_grid_mesh(vec![(&mesh, &GlobalTransform::default())], 0.08).unwrap();
+        assert_eq!(
+            grid.count_vertices(),
+            12 * 4,
+            "twelve segments around four collision cells"
+        );
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            grid.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("positions")
+        };
+        for ribbon in positions.chunks_exact(4) {
+            let start = (Vec3::from(ribbon[0]) + Vec3::from(ribbon[1])) * 0.5;
+            let end = (Vec3::from(ribbon[2]) + Vec3::from(ribbon[3])) * 0.5;
+            assert!(((end - start).xz().length() - 5.0).abs() < 0.001);
+            assert!((start.y - (-start.z * 0.4 + GRID_LIFT)).abs() < 0.001);
+        }
+    }
 
     #[test]
     fn terrain_fill_uses_collision_colors_at_visual_terrain_height() {

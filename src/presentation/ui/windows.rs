@@ -329,6 +329,7 @@ fn controls_window(ui: &Ui) {
             ui.text("Collision");
             ui.text("LMB / arrows - select cell");
             ui.text("F - toggle walkability");
+            ui.text("[ / ] - brush size / PageUp, PageDown - sculpt terrain");
             ui.text("Ctrl+Z / Ctrl+Y - undo / redo");
             ui.text("Ctrl+S - save");
             ui.separator();

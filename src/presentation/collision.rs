@@ -1,8 +1,12 @@
 use bevy::prelude::*;
+use bevy::{
+    picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
+    window::PrimaryWindow,
+};
 use lifthrasir_map_editor::LifCollisionFlags;
 
 use super::viewport::{CELL_SIZE, EditorCamera};
-use crate::application::{EditorDocument, EditorNotice, EditorSystems};
+use crate::application::{ActiveMapRoot, EditorDocument, EditorNotice, EditorSystems};
 
 #[derive(Resource, Default)]
 pub(super) struct CursorCell {
@@ -97,31 +101,51 @@ fn move_cursor(
 
 fn select_cursor_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
-    mut cursor_events: MessageReader<CursorMoved>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     document: Res<EditorDocument>,
     mut cursor: ResMut<CursorCell>,
     cameras: Query<(&Camera, &GlobalTransform), With<EditorCamera>>,
+    mut ray_cast: MeshRayCast,
+    parents: Query<&ChildOf>,
+    names: Query<&Name>,
+    roots: Query<(), With<ActiveMapRoot>>,
 ) {
-    let Some(position) = cursor_events.read().last().map(|event| event.position) else {
-        return;
-    };
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
+    let Some(position) = windows
+        .single()
+        .ok()
+        .and_then(|window| window.cursor_position())
+    else {
+        return;
+    };
     let Ok((camera, camera_transform)) = cameras.single() else {
         return;
     };
     let Ok(ray) = camera.viewport_to_world(camera_transform, position) else {
         return;
     };
-    if ray.direction.y.abs() < f32::EPSILON {
+    let terrain_filter = |mut entity| {
+        let mut terrain = false;
+        loop {
+            terrain |= names
+                .get(entity)
+                .is_ok_and(|name| name.as_str() == "terrain");
+            if roots.contains(entity) {
+                return terrain;
+            }
+            let Ok(parent) = parents.get(entity) else {
+                return false;
+            };
+            entity = parent.parent();
+        }
+    };
+    let settings = MeshRayCastSettings::default().with_filter(&terrain_filter);
+    let Some((_, hit)) = ray_cast.cast_ray(ray, &settings).first() else {
         return;
-    }
-    let distance = -ray.origin.y / ray.direction.y;
-    if distance < 0.0 {
-        return;
-    }
-    let hit = ray.origin + *ray.direction * distance;
+    };
+    let hit = hit.point;
     let (x, y) = (
         (hit.x / CELL_SIZE).floor() as i32,
         (-hit.z / CELL_SIZE).floor() as i32,

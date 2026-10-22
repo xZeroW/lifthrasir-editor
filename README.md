@@ -61,6 +61,7 @@ is no autosave.
 - `F`: toggle the selected cell's walkability
 - `[` / `]`: decrease / increase collision brush radius (`F` paints the brush)
 - The yellow footprint on the `P` grid previews the collision brush area.
+- `PageUp` / `PageDown`: raise / lower terrain vertices within the brush by one world unit (undoable). Terrain uses a coarser vertex spacing than collision cells; shared boundary vertices move together. Collision heights remain independent.
 
 ### Props
 
@@ -103,7 +104,7 @@ items name the work that remains.
 ### 3. Terrain and collision
 - [x] Render a reliable collision grid overlay using the map's actual terrain coordinate conversion.
 - [x] Add brush selection and multi-cell collision editing.
-- [ ] Add terrain height sculpting and regenerate terrain mesh data.
+- [x] Add terrain height sculpting and regenerate terrain mesh data.
 - [ ] Add terrain texture/material painting and preserve editor-owned terrain data in a new `LIF_editor` schema section.
 
 ### 4. World objects

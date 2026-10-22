@@ -4,6 +4,7 @@
 mod collision;
 mod props;
 mod terrain_grid;
+mod terrain_sculpt;
 mod ui;
 mod viewport;
 
@@ -20,6 +21,7 @@ impl Plugin for EditorPresentationPlugin {
             viewport::ViewportPlugin,
             terrain_grid::TerrainGridPlugin,
             collision::CollisionEditorPlugin,
+            terrain_sculpt::TerrainSculptPlugin,
             props::PropEditorPlugin,
             ui::EditorUiPlugin,
         ));
