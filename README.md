@@ -83,7 +83,7 @@ items name the work that remains.
 ### 1. Editing reliability
 - [x] Add structural tests for deleted-node GLB compaction and scene-index remapping.
 - [x] Add a reload command and unsaved-change confirmation.
-- [ ] Make save errors preserve the in-memory document and clearly identify the affected path.
+- [x] Make save errors preserve the in-memory document and clearly identify the affected path.
 - [ ] Ensure every edit type participates in the same coalesced history model.
 
 ### 2. Prop authoring

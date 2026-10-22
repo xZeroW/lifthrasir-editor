@@ -634,6 +634,36 @@ mod tests {
     }
 
     #[test]
+    fn save_failure_keeps_document_edits_and_identifies_the_map_path() {
+        let directory = write_document(root(lif::FORMAT_VERSION));
+        let mut document = MapDocument::open(directory.path().join("map.glb")).expect("document");
+        document
+            .set_prop_transform(1, [4.0, 5.0, 6.0], [0.0, 0.0, 0.0, 1.0], [1.0; 3])
+            .expect("edit prop");
+        let expected_path = directory.path().join("missing").join("map.glb");
+        document.source_path = expected_path.clone();
+        let json_before_save = document.json_chunk.clone();
+        let bin_before_save = document.bin_chunk.clone();
+
+        let error = document
+            .save()
+            .expect_err("save must fail without a parent");
+
+        assert!(
+            error
+                .to_string()
+                .contains(&expected_path.display().to_string())
+        );
+        assert!(document.is_dirty());
+        assert_eq!(document.json_chunk, json_before_save);
+        assert_eq!(document.bin_chunk, bin_before_save);
+        assert_eq!(
+            document.root.pointer("/nodes/1/translation"),
+            Some(&json!([4.0, 5.0, 6.0]))
+        );
+    }
+
+    #[test]
     fn prop_transform_edits_participate_in_undo_and_redo() {
         let directory = write_document(root(lif::FORMAT_VERSION));
         let mut document = MapDocument::open(directory.path().join("map.glb")).expect("document");

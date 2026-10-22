@@ -26,22 +26,28 @@ impl MapDocument {
     /// The in-memory node identities/history remain stable across saves.
     pub fn save(&mut self) -> Result<()> {
         self.commit_pending_prop_transform();
-        let collision = self.editor.collision;
-        let bytes =
-            lif::LifCollision::encode(&self.collision_cells, collision.width, collision.height)
-                .map_err(anyhow::Error::msg)?;
-        let compacted = compact_deleted_props(&self.root, &self.deleted_props)?;
-        self.json_chunk = serde_json::to_vec(&compacted).context("serializing edited map JSON")?;
-        let (start, end) = collision_range(&self.json_chunk, collision)?;
-        ensure!(
-            end - start == bytes.len(),
-            "LIF_editor collision storage changed size; a GLB rebuild is required"
-        );
-        self.bin_chunk[start..end].copy_from_slice(&bytes);
-        write_atomic(
-            &self.source_path,
-            &glb_container(&self.json_chunk, &self.bin_chunk),
-        )?;
+        let result = (|| {
+            let collision = self.editor.collision;
+            let bytes =
+                lif::LifCollision::encode(&self.collision_cells, collision.width, collision.height)
+                    .map_err(anyhow::Error::msg)?;
+            let compacted = compact_deleted_props(&self.root, &self.deleted_props)?;
+            let json_chunk =
+                serde_json::to_vec(&compacted).context("serializing edited map JSON")?;
+            let (start, end) = collision_range(&json_chunk, collision)?;
+            ensure!(
+                end - start == bytes.len(),
+                "LIF_editor collision storage changed size; a GLB rebuild is required"
+            );
+            let mut bin_chunk = self.bin_chunk.clone();
+            bin_chunk[start..end].copy_from_slice(&bytes);
+            write_atomic(&self.source_path, &glb_container(&json_chunk, &bin_chunk))?;
+            Ok((json_chunk, bin_chunk))
+        })()
+        .with_context(|| format!("saving map GLB {}", self.source_path.display()))?;
+
+        self.json_chunk = result.0;
+        self.bin_chunk = result.1;
         self.dirty = false;
         Ok(())
     }
