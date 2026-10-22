@@ -45,6 +45,9 @@ enum DocumentEdit {
         before: LifCollisionCell,
         after: LifCollisionCell,
     },
+    CollisionBatch {
+        cells: Vec<(usize, LifCollisionCell, LifCollisionCell)>,
+    },
     PropTransform {
         node_index: usize,
         before: NodeTransform,
@@ -111,6 +114,62 @@ impl MapDocument {
             before,
             after: cell,
         });
+        self.redo.clear();
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Sets all cells in a square brush to the requested walkability as one
+    /// undoable history operation.
+    pub fn set_collision_brush_walkable(
+        &mut self,
+        x: u32,
+        y: u32,
+        radius: u32,
+        walkable: bool,
+    ) -> Result<()> {
+        let collision = self.editor.collision;
+        ensure!(
+            x < collision.width && y < collision.height,
+            "collision cell ({x}, {y}) is outside {}x{}",
+            collision.width,
+            collision.height
+        );
+        let mut edits = Vec::new();
+        let radius = radius as i32;
+        for brush_y in y as i32 - radius..=y as i32 + radius {
+            for brush_x in x as i32 - radius..=x as i32 + radius {
+                if brush_x < 0
+                    || brush_y < 0
+                    || brush_x >= collision.width as i32
+                    || brush_y >= collision.height as i32
+                {
+                    continue;
+                }
+                let index = brush_y as usize * collision.width as usize + brush_x as usize;
+                let before = self.collision_cells[index];
+                let after = LifCollisionCell {
+                    flags: if walkable {
+                        lif::LifCollisionFlags::WALKABLE
+                    } else {
+                        lif::LifCollisionFlags::empty()
+                    },
+                    ..before
+                };
+                if before != after {
+                    edits.push((index, before, after));
+                }
+            }
+        }
+        if edits.is_empty() {
+            return Ok(());
+        }
+        self.commit_pending_prop_transform();
+        for (index, _, after) in &edits {
+            self.collision_cells[*index] = *after;
+        }
+        self.undo
+            .push(DocumentEdit::CollisionBatch { cells: edits });
         self.redo.clear();
         self.dirty = true;
         Ok(())
@@ -449,6 +508,11 @@ impl MapDocument {
             } => {
                 self.collision_cells[*index] = if forward { *after } else { *before };
             }
+            DocumentEdit::CollisionBatch { cells } => {
+                for (index, before, after) in cells {
+                    self.collision_cells[*index] = if forward { *after } else { *before };
+                }
+            }
             DocumentEdit::PropTransform {
                 node_index,
                 before,
@@ -713,6 +777,44 @@ mod tests {
     }
 
     #[test]
+    fn saves_game_compatible_gat_and_reuses_it_on_subsequent_saves() {
+        let directory = write_document(root(lif::FORMAT_VERSION));
+        let path = directory.path().join("map.glb");
+        let mut document = MapDocument::open(&path).unwrap();
+        let edited = LifCollisionCell {
+            height: [1.0, 2.0, 3.0, 4.0],
+            flags: lif::LifCollisionFlags::empty(),
+        };
+        document.set_collision_cell(0, 0, edited).unwrap();
+        document.save().unwrap();
+        let saved = MapDocument::open(&path).unwrap();
+        let gat: lif::LifGat =
+            serde_json::from_value(saved.root["extensions"]["LIF_gat"].clone()).unwrap();
+        let view = &saved.root["bufferViews"][gat.buffer_view as usize];
+        let start = view["byteOffset"].as_u64().unwrap() as usize;
+        let length = view["byteLength"].as_u64().unwrap() as usize;
+        let raw = &saved.bin_chunk[start..start + length];
+        gat.validate(raw).expect("game-compatible GAT dimensions");
+        let altitude = lif::LifGat::decode(raw).expect("game GAT decoder");
+        assert_eq!(altitude.cells[0].height, edited.height);
+        assert!(!altitude.cells[0].cell_type.is_walkable());
+        assert!(altitude.cells[1].cell_type.is_walkable());
+        assert_eq!(saved.collision_cell(0, 0), Some(edited));
+        let size = std::fs::metadata(&path).unwrap().len();
+        let view_count = saved.root["bufferViews"].as_array().unwrap().len();
+
+        document.save().unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), size);
+        let mut reopened = MapDocument::open(&path).unwrap();
+        reopened.save().unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), size);
+        assert_eq!(
+            reopened.root["bufferViews"].as_array().unwrap().len(),
+            view_count
+        );
+    }
+
+    #[test]
     fn collision_edits_undo_and_redo_without_writing_a_native_map() {
         let directory = write_document(root(lif::FORMAT_VERSION));
         let mut document = MapDocument::open(directory.path().join("map.glb")).expect("document");
@@ -729,6 +831,36 @@ mod tests {
         assert_eq!(document.collision_cell(1, 2), Some(original));
         assert!(document.redo());
         assert_eq!(document.collision_cell(1, 2), Some(edited));
+    }
+
+    #[test]
+    fn collision_brush_edits_multiple_cells_as_one_history_entry() {
+        let directory = write_document(root(lif::FORMAT_VERSION));
+        let mut document = MapDocument::open(directory.path().join("map.glb")).expect("document");
+
+        document
+            .set_collision_brush_walkable(0, 0, 1, false)
+            .expect("brush edit");
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            assert!(
+                !document
+                    .collision_cell(x, y)
+                    .expect("cell")
+                    .flags
+                    .contains(lif::LifCollisionFlags::WALKABLE)
+            );
+        }
+        assert!(document.undo());
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            assert!(
+                document
+                    .collision_cell(x, y)
+                    .expect("cell")
+                    .flags
+                    .contains(lif::LifCollisionFlags::WALKABLE)
+            );
+        }
+        assert!(!document.undo(), "the whole brush is one edit");
     }
 
     #[test]

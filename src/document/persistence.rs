@@ -31,23 +31,26 @@ impl MapDocument {
             let bytes =
                 lif::LifCollision::encode(&self.collision_cells, collision.width, collision.height)
                     .map_err(anyhow::Error::msg)?;
-            let compacted = compact_deleted_props(&self.root, &self.deleted_props)?;
-            let json_chunk =
-                serde_json::to_vec(&compacted).context("serializing edited map JSON")?;
-            let (start, end) = collision_range(&json_chunk, collision)?;
+            let mut root = self.root.clone();
+            let (start, end) = collision_range(&self.json_chunk, collision)?;
             ensure!(
                 end - start == bytes.len(),
                 "LIF_editor collision storage changed size; a GLB rebuild is required"
             );
             let mut bin_chunk = self.bin_chunk.clone();
             bin_chunk[start..end].copy_from_slice(&bytes);
+            sync_game_collision(&mut root, &mut bin_chunk, collision, &self.collision_cells)?;
+            let compacted = compact_deleted_props(&root, &self.deleted_props)?;
+            let json_chunk =
+                serde_json::to_vec(&compacted).context("serializing edited map JSON")?;
             write_atomic(&self.source_path, &glb_container(&json_chunk, &bin_chunk))?;
-            Ok((json_chunk, bin_chunk))
+            Ok((json_chunk, bin_chunk, root))
         })()
         .with_context(|| format!("saving map GLB {}", self.source_path.display()))?;
 
         self.json_chunk = result.0;
         self.bin_chunk = result.1;
+        self.root = result.2;
         self.dirty = false;
         Ok(())
     }
@@ -94,6 +97,87 @@ impl MapDocument {
             bin_chunk,
         })
     }
+}
+
+/// Bridge for game runtimes which still consume embedded raw GAT bytes rather
+/// than LIF_editor collision cells. Other buffer views and node identities are
+/// left intact; an existing compatible view is updated in place.
+fn sync_game_collision(
+    root: &mut serde_json::Value,
+    bin: &mut Vec<u8>,
+    collision: lif::LifCollision,
+    cells: &[lif::LifCollisionCell],
+) -> Result<()> {
+    let mut raw = b"GRAT\x01\x02".to_vec();
+    raw.extend_from_slice(&collision.width.to_le_bytes());
+    raw.extend_from_slice(&collision.height.to_le_bytes());
+    for cell in cells {
+        for height in cell.height {
+            raw.extend_from_slice(&height.to_le_bytes());
+        }
+        // Match LifCollision::to_altitude's runtime type conversion.
+        let flags = cell.flags;
+        let kind: u32 = if flags.contains(lif::LifCollisionFlags::WATER) {
+            3
+        } else if flags.contains(lif::LifCollisionFlags::WALKABLE) {
+            0
+        } else if flags.contains(lif::LifCollisionFlags::SNIPABLE) {
+            5
+        } else {
+            1
+        };
+        raw.extend_from_slice(&kind.to_le_bytes());
+    }
+    let existing = root
+        .pointer("/extensions/LIF_gat/buffer_view")
+        .and_then(serde_json::Value::as_u64)
+        .map(|index| index as usize);
+    let views = root
+        .get_mut("bufferViews")
+        .and_then(serde_json::Value::as_array_mut)
+        .context("map has no bufferViews")?;
+    let reusable = existing.and_then(|index| {
+        let view = views.get(index)?;
+        let offset = view
+            .get("byteOffset")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        let length = view.get("byteLength")?.as_u64()? as usize;
+        (length == raw.len() && offset.checked_add(length)? <= bin.len()).then_some((index, offset))
+    });
+    let view_index = if let Some((index, offset)) = reusable {
+        bin[offset..offset + raw.len()].copy_from_slice(&raw);
+        index
+    } else {
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let offset = bin.len();
+        bin.extend_from_slice(&raw);
+        let index = views.len();
+        views.push(serde_json::json!({
+            "buffer": 0, "byteOffset": offset, "byteLength": raw.len()
+        }));
+        index
+    };
+    root["extensions"]["LIF_gat"] = serde_json::json!({
+        "width": collision.width, "height": collision.height, "buffer_view": view_index
+    });
+    if root.get("buffers").is_none() {
+        root["buffers"] = serde_json::json!([{}]);
+    }
+    root["buffers"][0]["byteLength"] = serde_json::json!(bin.len());
+    let used = root
+        .as_object_mut()
+        .context("map root is not an object")?
+        .entry("extensionsUsed")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .context("extensionsUsed is not an array")?;
+    if !used.iter().any(|value| value == "LIF_gat") {
+        used.push(serde_json::json!("LIF_gat"));
+    }
+    Ok(())
 }
 
 fn initial_prop_transforms(

@@ -1,7 +1,10 @@
 # Lifthrasir Editor
 
 GLB-native editor for converted Lifthrasir maps. It does not read or write
-Ragnarok `RSW`, `GND`, `GAT`, or `GRF` files.
+standalone Ragnarok `RSW`, `GND`, `GAT`, or `GRF` files. Saving synchronizes
+an embedded `LIF_gat` compatibility payload from `LIF_editor` collision data
+for game runtimes that still require it. Open and save existing editor-only
+maps once to add this payload before loading them in the game.
 
 ## Setup
 
@@ -56,6 +59,7 @@ is no autosave.
 - Left click terrain: select a cell
 - Arrow keys: selected cell another cell
 - `F`: toggle the selected cell's walkability
+- `[` / `]`: decrease / increase collision brush radius (`F` paints the brush)
 
 ### Props
 
@@ -97,7 +101,7 @@ items name the work that remains.
 
 ### 3. Terrain and collision
 - [x] Render a reliable collision grid overlay using the map's actual terrain coordinate conversion.
-- [ ] Add brush selection and multi-cell collision editing.
+- [x] Add brush selection and multi-cell collision editing.
 - [ ] Add terrain height sculpting and regenerate terrain mesh data.
 - [ ] Add terrain texture/material painting and preserve editor-owned terrain data in a new `LIF_editor` schema section.
 
