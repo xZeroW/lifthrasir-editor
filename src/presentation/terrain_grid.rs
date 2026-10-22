@@ -9,7 +9,7 @@ use bevy::{
 use std::collections::HashSet;
 
 use crate::{
-    application::{ActiveMapRoot, EditorSystems},
+    application::{ActiveMapRoot, EditorDocument, EditorSystems},
     infrastructure::content::LifMapData,
 };
 
@@ -36,6 +36,9 @@ struct TerrainGrid {
     source_root: Option<Entity>,
 }
 
+#[derive(Component)]
+struct BrushPreview;
+
 /// Read-only scene access needed to distinguish terrain from prop meshes.
 #[derive(SystemParam)]
 struct TerrainScene<'w, 's> {
@@ -55,6 +58,7 @@ impl Plugin for TerrainGridPlugin {
                 Update,
                 (
                     sync_terrain_grid,
+                    sync_brush_preview,
                     toggle_terrain_grid.run_if(super::ui::viewport_input_allowed),
                 )
                     .in_set(EditorSystems::Present),
@@ -63,7 +67,93 @@ impl Plugin for TerrainGridPlugin {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn((TerrainGrid { source_root: None }, Visibility::Visible));
+    let root = commands
+        .spawn((
+            TerrainGrid { source_root: None },
+            Visibility::Visible,
+            Transform::default(),
+        ))
+        .id();
+    commands.spawn((
+        BrushPreview,
+        Transform::default(),
+        Visibility::Inherited,
+        ChildOf(root),
+    ));
+}
+
+fn sync_brush_preview(
+    mut commands: Commands,
+    scene: TerrainScene,
+    cursor: Res<super::collision::CursorCell>,
+    brush: Res<super::collision::CollisionBrush>,
+    document: Option<Res<EditorDocument>>,
+    previews: Query<(Entity, Option<&Mesh3d>), With<BrushPreview>>,
+    mut previous_root: Local<Option<Entity>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Some(document) = document else { return };
+    let Some(root) = scene.roots.iter().next() else {
+        return;
+    };
+    if *previous_root == Some(root)
+        && !cursor.is_changed()
+        && !brush.is_changed()
+        && !document.is_changed()
+        && previews.iter().all(|(_, mesh)| mesh.is_some())
+    {
+        return;
+    }
+    let Some(terrain) = terrain_mesh_entities(root, &scene.children)
+        .into_iter()
+        .find(|&entity| {
+            scene
+                .names
+                .get(entity)
+                .is_ok_and(|name| name.as_str() == "terrain")
+        })
+    else {
+        return;
+    };
+    let sources = terrain_mesh_entities(terrain, &scene.children)
+        .into_iter()
+        .filter_map(|entity| scene.meshes.get(entity).ok())
+        .filter_map(|(handle, transform)| meshes.get(&handle.0).map(|mesh| (mesh, transform)))
+        .collect::<Vec<_>>();
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new())
+    .with_inserted_indices(Indices::U32(Vec::new()));
+    let mut colors = Vec::new();
+    append_collision_fill(
+        &mut mesh,
+        &mut colors,
+        &sources,
+        &document.0,
+        Some((cursor.x, cursor.y, brush.radius)),
+    );
+    if mesh.count_vertices() == 0 {
+        return;
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    let material = materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        unlit: true,
+        alpha_mode: AlphaMode::Blend,
+        cull_mode: None,
+        ..default()
+    });
+    let handle = meshes.add(mesh);
+    for (entity, _) in &previews {
+        commands
+            .entity(entity)
+            .insert((Mesh3d(handle.clone()), MeshMaterial3d(material.clone())));
+    }
+    *previous_root = Some(root);
 }
 
 /// Build the grid from the converted terrain mesh rather than GAT collision
@@ -74,6 +164,7 @@ fn sync_terrain_grid(
     scene: TerrainScene,
     mut grids: Query<(Entity, &mut TerrainGrid, Option<&Mesh3d>)>,
     style: Res<TerrainGridStyle>,
+    document: Option<Res<EditorDocument>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -85,6 +176,9 @@ fn sync_terrain_grid(
         .iter()
         .all(|(_, grid, mesh)| mesh.is_some() && grid.source_root == Some(root))
         && !style_changed
+        && !document
+            .as_ref()
+            .is_some_and(|document| document.is_changed())
     {
         return;
     }
@@ -104,30 +198,179 @@ fn sync_terrain_grid(
         .filter_map(|entity| scene.meshes.get(entity).ok())
         .filter_map(|(handle, transform)| meshes.get(&handle.0).map(|mesh| (mesh, transform)))
         .collect::<Vec<_>>();
-    let Some(grid_mesh) = terrain_grid_mesh(terrain_meshes, style.line_width) else {
+    let Some(mut grid_mesh) = terrain_grid_mesh(terrain_meshes.clone(), style.line_width) else {
         return;
     };
+    let mut colors =
+        vec![[style.color[0], style.color[1], style.color[2], 0.9]; grid_mesh.count_vertices()];
+    if let Some(document) = document.as_ref() {
+        append_collision_fill(
+            &mut grid_mesh,
+            &mut colors,
+            &terrain_meshes,
+            &document.0,
+            None,
+        );
+    }
+    grid_mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     let mesh = meshes.add(grid_mesh);
     let material = materials.add(StandardMaterial {
-        base_color: Color::srgba(style.color[0], style.color[1], style.color[2], 0.9),
-        emissive: LinearRgba::rgb(
-            style.color[0] * 0.25,
-            style.color[1] * 0.25,
-            style.color[2] * 0.25,
-        ),
+        base_color: Color::WHITE,
         unlit: true,
         alpha_mode: AlphaMode::Blend,
         cull_mode: None,
         ..default()
     });
     for (entity, mut grid, existing_mesh) in &mut grids {
-        if existing_mesh.is_none() || style_changed || grid.source_root != Some(root) {
+        if existing_mesh.is_none()
+            || style_changed
+            || grid.source_root != Some(root)
+            || document
+                .as_ref()
+                .is_some_and(|document| document.is_changed())
+        {
             commands
                 .entity(entity)
                 .insert((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone())));
             grid.source_root = Some(root);
         }
     }
+}
+
+/// Clip terrain triangles to collision-cell footprints, retaining the visual
+/// terrain's interpolated height rather than the independent GAT height.
+fn append_collision_fill(
+    grid: &mut Mesh,
+    colors: &mut Vec<[f32; 4]>,
+    sources: &[(&Mesh, &GlobalTransform)],
+    document: &lifthrasir_map_editor::MapDocument,
+    brush: Option<(u32, u32, u32)>,
+) {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+    for (mesh, transform) in sources {
+        let Some(VertexAttributeValues::Float32x3(vertices)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            continue;
+        };
+        let source_indices: Vec<_> = mesh
+            .indices()
+            .map(|indices| indices.iter().collect())
+            .unwrap_or_else(|| (0..vertices.len()).collect());
+        for triangle in source_indices.chunks_exact(3) {
+            let points = triangle
+                .iter()
+                .map(|&index| transform.transform_point(Vec3::from(vertices[index])))
+                .collect::<Vec<_>>();
+            if (points[1] - points[0]).cross(points[2] - points[0]).y <= 0.001 {
+                continue;
+            }
+            let min = points
+                .iter()
+                .copied()
+                .fold(Vec3::splat(f32::INFINITY), Vec3::min);
+            let max = points
+                .iter()
+                .copied()
+                .fold(Vec3::splat(f32::NEG_INFINITY), Vec3::max);
+            let size = super::viewport::CELL_SIZE;
+            let width = document.editor.collision.width as i32;
+            let height = document.editor.collision.height as i32;
+            for y in ((-max.z / size).floor() as i32).max(0)
+                ..=((-min.z / size).floor() as i32).min(height - 1)
+            {
+                for x in ((min.x / size).floor() as i32).max(0)
+                    ..=((max.x / size).floor() as i32).min(width - 1)
+                {
+                    if let Some((cx, cy, radius)) = brush {
+                        if (x as u32).abs_diff(cx) > radius || (y as u32).abs_diff(cy) > radius {
+                            continue;
+                        }
+                    }
+                    let Some(cell) = document.collision_cell(x as u32, y as u32) else {
+                        continue;
+                    };
+                    let mut polygon = points.clone();
+                    for (axis, boundary, greater) in [
+                        (0, x as f32 * size, true),
+                        (0, (x + 1) as f32 * size, false),
+                        (2, -(y + 1) as f32 * size, true),
+                        (2, -y as f32 * size, false),
+                    ] {
+                        polygon = clip_polygon(&polygon, axis, boundary, greater);
+                    }
+                    if polygon.len() < 3 {
+                        continue;
+                    }
+                    let color = if brush.is_some() {
+                        [1.0, 0.85, 0.05, 0.8]
+                    } else if cell
+                        .flags
+                        .contains(lifthrasir_map_editor::LifCollisionFlags::WALKABLE)
+                    {
+                        [0.1, 0.95, 0.2, 0.45]
+                    } else {
+                        [1.0, 0.08, 0.08, 0.45]
+                    };
+                    let base = (grid.count_vertices() + positions.len()) as u32;
+                    for point in &polygon {
+                        let lift = if brush.is_some() {
+                            GRID_LIFT * 1.5
+                        } else {
+                            GRID_LIFT * 0.5
+                        };
+                        positions.push((*point + Vec3::Y * lift).to_array());
+                        normals.push([0.0, 1.0, 0.0]);
+                        colors.push(color);
+                    }
+                    for index in 1..polygon.len() - 1 {
+                        indices.extend([base, base + index as u32, base + index as u32 + 1]);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(VertexAttributeValues::Float32x3(values)) =
+        grid.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    {
+        values.extend(positions);
+    }
+    if let Some(VertexAttributeValues::Float32x3(values)) =
+        grid.attribute_mut(Mesh::ATTRIBUTE_NORMAL)
+    {
+        values.extend(normals);
+    }
+    if let Some(Indices::U32(values)) = grid.indices_mut() {
+        values.extend(indices);
+    }
+}
+
+fn clip_polygon(points: &[Vec3], axis: usize, boundary: f32, greater: bool) -> Vec<Vec3> {
+    let mut result = Vec::new();
+    if points.is_empty() {
+        return result;
+    }
+    let inside = |point: Vec3| {
+        if greater {
+            point[axis] >= boundary
+        } else {
+            point[axis] <= boundary
+        }
+    };
+    let mut previous = *points.last().unwrap();
+    for &point in points {
+        if inside(previous) != inside(point) {
+            let fraction = (boundary - previous[axis]) / (point[axis] - previous[axis]);
+            result.push(previous.lerp(point, fraction));
+        }
+        if inside(point) {
+            result.push(point);
+        }
+        previous = point;
+    }
+    result
 }
 
 fn terrain_mesh_entities(root: Entity, children: &Query<&Children>) -> Vec<Entity> {
@@ -264,6 +507,85 @@ fn toggle_terrain_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terrain_fill_uses_collision_colors_at_visual_terrain_height() {
+        let (_directory, mut document) = crate::test_support::document();
+        let source = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            vec![[0.0, 20.0, 0.0], [5.0, 20.0, 0.0], [5.0, 20.0, -5.0]],
+        );
+        let transform = GlobalTransform::default();
+        for walkable in [true, false] {
+            document
+                .set_collision_brush_walkable(0, 0, 0, walkable)
+                .unwrap();
+            let mut mesh = terrain_grid_mesh(vec![(&source, &transform)], 0.08).unwrap();
+            let count = mesh.count_vertices();
+            let mut colors = vec![[1.0; 4]; count];
+            append_collision_fill(
+                &mut mesh,
+                &mut colors,
+                &[(&source, &transform)],
+                &document,
+                None,
+            );
+            let expected = if walkable {
+                [0.1, 0.95, 0.2, 0.45]
+            } else {
+                [1.0, 0.08, 0.08, 0.45]
+            };
+            assert!(colors[count..].iter().all(|color| *color == expected));
+            assert!(mesh.count_vertices() > count);
+            let Some(VertexAttributeValues::Float32x3(positions)) =
+                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+            else {
+                panic!("positions")
+            };
+            assert!(
+                positions[count..]
+                    .iter()
+                    .all(|point| (point[1] - (20.0 + GRID_LIFT * 0.5)).abs() < 0.001)
+            );
+        }
+    }
+
+    #[test]
+    fn brush_preview_only_covers_cells_in_its_footprint() {
+        let (_directory, document) = crate::test_support::document();
+        let source = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            vec![[0.0, 20.0, 0.0], [5.0, 20.0, 0.0], [5.0, 20.0, -5.0]],
+        );
+        let transform = GlobalTransform::default();
+        for (x, expected_visible) in [(0, true), (1, false)] {
+            let mut mesh = Mesh::new(
+                PrimitiveTopology::TriangleList,
+                RenderAssetUsages::default(),
+            )
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new())
+            .with_inserted_indices(Indices::U32(Vec::new()));
+            let mut colors = Vec::new();
+            append_collision_fill(
+                &mut mesh,
+                &mut colors,
+                &[(&source, &transform)],
+                &document,
+                Some((x, 0, 0)),
+            );
+            assert_eq!(!colors.is_empty(), expected_visible);
+            assert!(colors.iter().all(|color| *color == [1.0, 0.85, 0.05, 0.8]));
+        }
+    }
 
     #[test]
     fn terrain_grid_deduplicates_reversed_edges() {

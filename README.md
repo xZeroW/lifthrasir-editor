@@ -60,6 +60,7 @@ is no autosave.
 - Arrow keys: selected cell another cell
 - `F`: toggle the selected cell's walkability
 - `[` / `]`: decrease / increase collision brush radius (`F` paints the brush)
+- The yellow footprint on the `P` grid previews the collision brush area.
 
 ### Props
 
