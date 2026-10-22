@@ -64,7 +64,7 @@ fn duplicate_selected_prop(
                 duplicate_transform,
                 Visibility::Inherited,
             ));
-            notice.show(format!("Duplicated prop (node {index}) — Ctrl+S to save"));
+            notice.show(format!("Duplicated prop (node {index})"));
         }
         Err(error) => notice.show(format!("Duplicate failed: {error}")),
     }
@@ -90,7 +90,7 @@ fn delete_selected_prop(
         return;
     }
     *visibility = Visibility::Hidden;
-    notice.show("Deleted prop — Ctrl+S to save");
+    notice.show("Deleted prop");
 }
 
 /// Scene synchronization belongs to presentation, not the history command.

@@ -585,7 +585,7 @@ mod tests {
             .expect("prop transform");
         document.save().expect("save");
 
-        let saved = MapDocument::open(path).expect("reopen");
+        let saved = MapDocument::open(path).expect("reload");
         assert_eq!(
             saved.root.pointer("/nodes/1/translation"),
             Some(&json!([1.0, 2.0, 3.0]))
@@ -594,6 +594,43 @@ mod tests {
             saved.root.pointer("/nodes/1/scale"),
             Some(&json!([2.0, 2.0, 2.0]))
         );
+    }
+
+    #[test]
+    fn saving_deleted_props_compacts_nodes_and_remaps_scene_hierarchy() {
+        let mut map = root(lif::FORMAT_VERSION);
+        map["nodes"] = json!([
+            { "name": "map root", "children": [1, 2] },
+            { "name": "deleted child", "extras": { "lif_prop": {} } },
+            { "name": "kept group", "children": [3] },
+            { "name": "kept prop", "extras": { "lif_prop": {} } },
+            { "name": "deleted scene root", "extras": { "lif_prop": {} } }
+        ]);
+        map["scenes"] = json!([{ "nodes": [0, 4] }]);
+        let directory = write_document(map);
+        let path = directory.path().join("map.glb");
+        let mut document = MapDocument::open(&path).expect("document");
+
+        document.set_prop_deleted(1, true).expect("delete child");
+        document
+            .set_prop_deleted(4, true)
+            .expect("delete scene root");
+        document.save().expect("save");
+
+        let saved = MapDocument::open(path).expect("reload compacted map");
+        assert_eq!(saved.root["nodes"].as_array().map(Vec::len), Some(3));
+        assert_eq!(
+            saved.root.pointer("/nodes/0/children"),
+            Some(&json!([1])),
+            "the kept group shifts from node 2 to node 1"
+        );
+        assert_eq!(
+            saved.root.pointer("/nodes/1/children"),
+            Some(&json!([2])),
+            "the kept prop shifts from node 3 to node 2"
+        );
+        assert_eq!(saved.root.pointer("/scenes/0/nodes"), Some(&json!([0])));
+        assert_eq!(saved.scene.props, 1);
     }
 
     #[test]

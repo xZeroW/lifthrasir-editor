@@ -5,7 +5,10 @@ use dear_imgui_rs::{Condition, Ui, WindowFlags};
 
 use super::{
     EditorUiState,
-    files::{MapFilePicker, start_map_file_picker},
+    files::{
+        MapFilePicker, MapOpenConfirmation, MapOpenRequest, cancel_map_open, confirm_map_open,
+        start_map_file_picker,
+    },
 };
 use crate::{
     application::{EditorDocument, EditorNotice, save},
@@ -17,6 +20,8 @@ pub(super) fn draw(
     mut state: ResMut<EditorUiState>,
     mut style: ResMut<TerrainGridStyle>,
     mut picker: ResMut<MapFilePicker>,
+    mut open_request: ResMut<MapOpenRequest>,
+    mut open_confirmation: ResMut<MapOpenConfirmation>,
     document: Option<ResMut<EditorDocument>>,
     mut notice: ResMut<EditorNotice>,
     mut exit: MessageWriter<AppExit>,
@@ -27,6 +32,18 @@ pub(super) fn draw(
         ui.menu("File", || {
             if ui.menu_item_with_shortcut("Open File", "Ctrl+O") {
                 start_map_file_picker(&mut picker);
+            }
+            if ui.menu_item_with_shortcut("Reload File", "Ctrl+R") {
+                if let Some(document) = document.as_ref() {
+                    super::files::request_map_open(
+                        document.0.source_path.clone(),
+                        Some(document),
+                        &mut open_request,
+                        &mut open_confirmation,
+                    );
+                } else {
+                    notice.show("Open a map before reloading");
+                }
             }
             if ui.menu_item_with_shortcut("Save File", "Ctrl+S") {
                 match document.as_mut() {
@@ -45,8 +62,33 @@ pub(super) fn draw(
         }
     });
     settings_window(ui, &mut state.settings_open, &mut style);
+    unsaved_changes_dialog(ui, &mut open_request, &mut open_confirmation);
     controls_window(ui);
     notice_window(ui, &notice.message);
+}
+
+fn unsaved_changes_dialog(
+    ui: &Ui,
+    request: &mut MapOpenRequest,
+    confirmation: &mut MapOpenConfirmation,
+) {
+    if confirmation.0.is_none() {
+        return;
+    }
+    ui.open_popup("Unsaved changes");
+    ui.modal_popup("Unsaved changes", || {
+        ui.text("The current map has unsaved changes.");
+        ui.text("Discard them and reload the selected map?");
+        if ui.button("Discard Changes") {
+            confirm_map_open(request, confirmation);
+            ui.close_current_popup();
+        }
+        ui.same_line();
+        if ui.button("Cancel") {
+            cancel_map_open(confirmation);
+            ui.close_current_popup();
+        }
+    });
 }
 
 fn settings_window(ui: &Ui, open: &mut bool, style: &mut ResMut<TerrainGridStyle>) {

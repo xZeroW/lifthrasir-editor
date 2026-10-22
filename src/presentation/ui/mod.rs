@@ -29,6 +29,8 @@ impl Plugin for EditorUiPlugin {
         app.add_plugins(ImguiPlugin::default())
             .init_resource::<EditorUiState>()
             .init_resource::<files::MapFilePicker>()
+            .init_resource::<files::MapOpenRequest>()
+            .init_resource::<files::MapOpenConfirmation>()
             .configure_sets(Update, EditorSystems::Edit.run_if(viewport_input_allowed))
             .configure_sets(
                 Update,
@@ -42,7 +44,9 @@ impl Plugin for EditorUiPlugin {
                 Update,
                 (
                     files::open_file_shortcut.run_if(input::shortcuts_allowed),
+                    files::reload_file_shortcut.run_if(input::shortcuts_allowed),
                     files::poll_map_file_picker,
+                    files::open_requested_map.after(files::poll_map_file_picker),
                     update_notice.in_set(EditorSystems::Present),
                 ),
             );

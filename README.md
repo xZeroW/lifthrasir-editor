@@ -39,6 +39,7 @@ payload. Convert outdated maps in the Lifthrasir checkout before opening them.
 ### File and camera
 
 - `Ctrl+O`: open a map
+- `Ctrl+R`: reload the current map
 - `Ctrl+S`: save the current map
 - `W/A/S/D`: move the camera
 - Right mouse drag: look around
@@ -80,8 +81,8 @@ Status reflects the current implementation: checked items are complete; partial
 items name the work that remains.
 
 ### 1. Editing reliability
-- [ ] Add structural tests for deleted-node GLB compaction and scene-index remapping.
-- [ ] Add a reload/reopen command and unsaved-change confirmation.
+- [x] Add structural tests for deleted-node GLB compaction and scene-index remapping.
+- [x] Add a reload command and unsaved-change confirmation.
 - [ ] Make save errors preserve the in-memory document and clearly identify the affected path.
 - [ ] Ensure every edit type participates in the same coalesced history model.
 

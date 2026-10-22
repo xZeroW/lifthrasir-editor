@@ -4,7 +4,7 @@ use bevy::prelude::*;
 
 use super::SelectedProp;
 use crate::{
-    application::{EditorDocument, EditorSystems},
+    application::{EditorDocument, EditorSystems, control_pressed},
     infrastructure::content::{LifMapNodeIndex, LifPropRef},
     presentation::viewport::EditorCamera,
 };
@@ -45,6 +45,10 @@ impl Plugin for PropGizmoPlugin {
 }
 
 fn switch_gizmo_mode(keys: Res<ButtonInput<KeyCode>>, mut gizmo: ResMut<PropGizmo>) {
+    // Ctrl+R is reserved for reloading the document, not rotate mode.
+    if control_pressed(&keys) {
+        return;
+    }
     if keys.just_pressed(KeyCode::KeyG) {
         gizmo.mode = GizmoMode::Translate;
     }
@@ -207,5 +211,23 @@ mod tests {
         assert_eq!(document.0.prop_transform(0).unwrap().0, [0.0; 3]);
         assert!(!document.0.undo(), "one undo entry per drag");
         assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn control_r_does_not_switch_to_rotate_mode() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<PropGizmo>()
+            .add_systems(Update, switch_gizmo_mode);
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::ControlLeft);
+        keys.press(KeyCode::KeyR);
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<PropGizmo>().mode,
+            GizmoMode::Translate
+        );
     }
 }
