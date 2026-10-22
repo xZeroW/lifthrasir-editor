@@ -2,6 +2,7 @@
 //! live in separate modules; none are shared with the game client's UI.
 mod files;
 mod input;
+mod models;
 mod windows;
 
 #[cfg(test)]
@@ -41,6 +42,7 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<files::MapFilePicker>()
             .init_resource::<files::MapOpenRequest>()
             .init_resource::<files::MapOpenConfirmation>()
+            .init_resource::<models::ModelBrowser>()
             .configure_sets(Update, EditorSystems::Edit.run_if(viewport_input_allowed))
             .configure_sets(
                 Update,
@@ -57,6 +59,7 @@ impl Plugin for EditorUiPlugin {
                     files::reload_file_shortcut.run_if(input::shortcuts_allowed),
                     files::poll_map_file_picker,
                     files::open_requested_map.after(files::poll_map_file_picker),
+                    models::poll_model_scan,
                     update_notice.in_set(EditorSystems::Present),
                 ),
             );

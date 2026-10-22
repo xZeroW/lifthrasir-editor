@@ -8,7 +8,10 @@ use bevy::{
 };
 use std::collections::HashSet;
 
-use crate::{application::EditorSystems, infrastructure::content::LifMapData};
+use crate::{
+    application::{ActiveMapRoot, EditorSystems},
+    infrastructure::content::LifMapData,
+};
 
 const GRID_LIFT: f32 = 0.08;
 
@@ -29,12 +32,14 @@ impl Default for TerrainGridStyle {
 }
 
 #[derive(Component)]
-struct TerrainGrid;
+struct TerrainGrid {
+    source_root: Option<Entity>,
+}
 
 /// Read-only scene access needed to distinguish terrain from prop meshes.
 #[derive(SystemParam)]
 struct TerrainScene<'w, 's> {
-    roots: Query<'w, 's, Entity, With<LifMapData>>,
+    roots: Query<'w, 's, Entity, (With<LifMapData>, With<ActiveMapRoot>)>,
     children: Query<'w, 's, &'static Children>,
     names: Query<'w, 's, &'static Name>,
     meshes: Query<'w, 's, (&'static Mesh3d, &'static GlobalTransform)>,
@@ -58,7 +63,7 @@ impl Plugin for TerrainGridPlugin {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn((TerrainGrid, Visibility::Visible));
+    commands.spawn((TerrainGrid { source_root: None }, Visibility::Visible));
 }
 
 /// Build the grid from the converted terrain mesh rather than GAT collision
@@ -67,19 +72,24 @@ fn setup(mut commands: Commands) {
 fn sync_terrain_grid(
     mut commands: Commands,
     scene: TerrainScene,
-    grids: Query<(Entity, Option<&Mesh3d>), With<TerrainGrid>>,
+    mut grids: Query<(Entity, &mut TerrainGrid, Option<&Mesh3d>)>,
     style: Res<TerrainGridStyle>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let style_changed = style.is_changed();
-    if grids.iter().all(|(_, mesh)| mesh.is_some()) && !style_changed {
+    let Some(root) = scene.roots.iter().next() else {
+        return;
+    };
+    if grids
+        .iter()
+        .all(|(_, grid, mesh)| mesh.is_some() && grid.source_root == Some(root))
+        && !style_changed
+    {
         return;
     }
-    let Some(terrain) = scene
-        .roots
-        .iter()
-        .flat_map(|root| terrain_mesh_entities(root, &scene.children))
+    let Some(terrain) = terrain_mesh_entities(root, &scene.children)
+        .into_iter()
         .find(|&entity| {
             scene
                 .names
@@ -110,11 +120,12 @@ fn sync_terrain_grid(
         cull_mode: None,
         ..default()
     });
-    for (entity, existing_mesh) in &grids {
-        if existing_mesh.is_none() || style_changed {
+    for (entity, mut grid, existing_mesh) in &mut grids {
+        if existing_mesh.is_none() || style_changed || grid.source_root != Some(root) {
             commands
                 .entity(entity)
                 .insert((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone())));
+            grid.source_root = Some(root);
         }
     }
 }
@@ -295,7 +306,7 @@ mod tests {
             .add_systems(Update, toggle_terrain_grid);
         let grid = app
             .world_mut()
-            .spawn((TerrainGrid, Visibility::Visible))
+            .spawn((TerrainGrid { source_root: None }, Visibility::Visible))
             .id();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()

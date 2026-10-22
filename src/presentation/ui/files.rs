@@ -5,7 +5,7 @@ use bevy::{
 };
 
 use crate::{
-    application::{EditorDocument, EditorNotice, control_pressed},
+    application::{ActiveMapRoot, EditorDocument, EditorNotice, control_pressed},
     infrastructure::content::MapSceneRequest,
     map_asset_path,
     presentation::MapAssetPath,
@@ -114,7 +114,7 @@ pub(super) fn open_requested_map(
     mut request: ResMut<MapOpenRequest>,
     document: Option<ResMut<EditorDocument>>,
     mut map_path: ResMut<MapAssetPath>,
-    mut requests: Query<(Entity, &mut MapSceneRequest)>,
+    mut requests: Query<(Entity, &MapSceneRequest, &mut Visibility), With<ActiveMapRoot>>,
     mut notice: ResMut<EditorNotice>,
 ) {
     let Some(path) = request.0.take() else {
@@ -140,24 +140,19 @@ pub(super) fn open_requested_map(
         commands.insert_resource(EditorDocument(replacement));
     }
     map_path.0 = Some(asset_path.clone());
-    if let Ok((root, mut request)) = requests.single_mut() {
-        let scene_path = format!("ro://{asset_path}");
-        // Reopening the active document only replaces its editor-side state.
-        // Recreating an already-instanced WorldAssetRoot with the same handle
-        // can leave Bevy's spawner trying to parent a queued instance to a
-        // scene entity it has just despawned. The scene already represents
-        // this asset; document synchronization applies its editable state.
-        if request.path != scene_path {
-            request.path = scene_path;
-            commands
-                .entity(root)
-                .remove::<lifthrasir_runtime::world::MapSceneHandle>();
+    let scene_path = format!("ro://{asset_path}");
+    if let Ok((root, request, mut visibility)) = requests.single_mut() {
+        if request.path == scene_path {
+            notice.show(format!("Opened {}", path.display()));
+            return;
         }
-    } else {
-        commands.spawn(MapSceneRequest {
-            path: format!("ro://{asset_path}"),
-        });
+        // Keep the old root alive: Bevy's world-asset spawner may still have
+        // nested prop instances queued against it. Removing/replacing it can
+        // otherwise make those queued instances parent to a despawned entity.
+        *visibility = Visibility::Hidden;
+        commands.entity(root).remove::<ActiveMapRoot>();
     }
+    commands.spawn((ActiveMapRoot, MapSceneRequest { path: scene_path }));
     notice.show(format!("Opened {}", path.display()));
 }
 

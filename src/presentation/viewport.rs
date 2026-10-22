@@ -6,7 +6,7 @@ use bevy::{
 };
 
 use crate::{
-    application::EditorSystems,
+    application::{ActiveMapRoot, EditorSystems},
     infrastructure::content::{LifMapData, MapSceneRequest},
 };
 
@@ -37,9 +37,12 @@ fn setup(mut commands: Commands, map_path: Res<MapAssetPath>) {
         Transform::from_xyz(600.0, 500.0, 700.0).looking_at(Vec3::new(600.0, 0.0, -600.0), Vec3::Y),
     ));
     if let Some(path) = &map_path.0 {
-        commands.spawn(MapSceneRequest {
-            path: format!("ro://{path}"),
-        });
+        commands.spawn((
+            ActiveMapRoot,
+            MapSceneRequest {
+                path: format!("ro://{path}"),
+            },
+        ));
     }
 }
 
@@ -57,7 +60,7 @@ fn camera_settings() -> FreeCamera {
 /// The host owns map activation policy; the shared renderer supplies metadata.
 fn apply_map_lighting(
     mut commands: Commands,
-    maps: Query<&LifMapData, Added<LifMapData>>,
+    maps: Query<&LifMapData, (Added<LifMapData>, With<ActiveMapRoot>)>,
     mut cameras: Query<(&mut Transform, &mut Exposure), With<EditorCamera>>,
 ) {
     for data in &maps {

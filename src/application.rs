@@ -6,6 +6,12 @@ use lifthrasir_map_editor::MapDocument;
 #[derive(Resource)]
 pub(crate) struct EditorDocument(pub MapDocument);
 
+/// Marks the one map scene root whose props and lighting are active. Previous
+/// roots stay alive but hidden while their asynchronously loaded world assets
+/// finish attaching, avoiding stale-parent spawner failures during map changes.
+#[derive(Component)]
+pub(crate) struct ActiveMapRoot;
+
 #[derive(Resource, Default)]
 pub(crate) struct EditorNotice {
     pub message: String,

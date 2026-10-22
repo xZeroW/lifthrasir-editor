@@ -9,6 +9,7 @@ use super::{
         MapFilePicker, MapOpenConfirmation, MapOpenRequest, cancel_map_open, confirm_map_open,
         start_map_file_picker,
     },
+    models::{ModelBrowser, model_scan_active, start_model_scan},
 };
 use crate::{
     application::{EditorDocument, EditorNotice, save},
@@ -25,6 +26,7 @@ pub(super) fn draw(
     mut picker: ResMut<MapFilePicker>,
     mut open_request: ResMut<MapOpenRequest>,
     mut open_confirmation: ResMut<MapOpenConfirmation>,
+    mut model_browser: ResMut<ModelBrowser>,
     document: Option<ResMut<EditorDocument>>,
     selected: Res<SelectedProp>,
     props: Query<(&LifMapNodeIndex, &Transform, &LifPropRef), With<LifPropRef>>,
@@ -81,7 +83,9 @@ pub(super) fn draw(
         &props,
         document.as_mut(),
         &mut snap,
+        &mut model_browser,
     );
+    model_browser_window(ui, &mut state, &mut model_browser);
     controls_window(ui);
     notice_window(ui, &notice.message);
 }
@@ -93,6 +97,7 @@ fn prop_transform_window(
     props: &Query<(&LifMapNodeIndex, &Transform, &LifPropRef), With<LifPropRef>>,
     document: Option<&mut ResMut<EditorDocument>>,
     snap: &mut TransformSnap,
+    model_browser: &mut ModelBrowser,
 ) {
     ui.window("Prop Inspector")
         .position([18.0, 320.0], Condition::FirstUseEver)
@@ -135,6 +140,11 @@ fn prop_transform_window(
             }
             ui.input_text("Replacement model", &mut state.model_path)
                 .build();
+            ui.same_line();
+            if ui.button("Browse Models") {
+                model_browser.open = true;
+                start_model_scan(model_browser);
+            }
             if ui.button("Replace Model") {
                 if let Err(error) = document.0.replace_prop_model(node.0, &state.model_path) {
                     error!("replacing prop model: {error:#}");
@@ -184,6 +194,53 @@ fn prop_transform_window(
                 reset_prop_transform(document.0.reset_prop_scale(node.0));
             }
         });
+}
+
+fn model_browser_window(ui: &Ui, state: &mut EditorUiState, browser: &mut ModelBrowser) {
+    if !browser.open {
+        return;
+    }
+    let mut open = browser.open;
+    let mut selected = None;
+    ui.window("Converted Models")
+        .opened(&mut open)
+        .position([420.0, 80.0], Condition::FirstUseEver)
+        .size([560.0, 430.0], Condition::FirstUseEver)
+        .build(|| {
+            if model_scan_active(browser) {
+                ui.text("Scanning converted models...");
+                return;
+            }
+            ui.input_text("Search", &mut browser.query).build();
+            let query = browser.query.to_lowercase();
+            let match_count = browser
+                .models
+                .iter()
+                .filter(|model| query.is_empty() || model.to_lowercase().contains(&query))
+                .count();
+            ui.child_window("Model results")
+                .size([0.0, 350.0])
+                .build(ui, || {
+                    for model in browser
+                        .models
+                        .iter()
+                        .filter(|model| query.is_empty() || model.to_lowercase().contains(&query))
+                        .take(200)
+                    {
+                        if ui.selectable(model) {
+                            selected = Some(model.clone());
+                        }
+                    }
+                });
+            if match_count > 200 {
+                ui.text_disabled("Showing the first 200 matching models. Refine the search.");
+            }
+        });
+    browser.open = open;
+    if let Some(model) = selected {
+        state.model_path = model;
+        browser.open = false;
+    }
 }
 
 fn reset_prop_transform(result: anyhow::Result<()>) {

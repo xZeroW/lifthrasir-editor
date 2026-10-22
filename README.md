@@ -93,7 +93,7 @@ items name the work that remains.
 - [x] Add prop metadata panel: node name, model path, transform, animation values.
 - [x] Add duplicate prop operations.
 - [x] Add replace-model operations.
-- [ ] Add a searchable converted-model browser.
+- [x] Add a searchable converted-model browser.
 
 ### 3. Terrain and collision
 - [ ] Render a reliable collision grid overlay using the map's actual terrain coordinate conversion.
