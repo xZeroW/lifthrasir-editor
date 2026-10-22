@@ -84,7 +84,7 @@ items name the work that remains.
 - [x] Add structural tests for deleted-node GLB compaction and scene-index remapping.
 - [x] Add a reload command and unsaved-change confirmation.
 - [x] Make save errors preserve the in-memory document and clearly identify the affected path.
-- [ ] Ensure every edit type participates in the same coalesced history model.
+- [x] Ensure every edit type participates in the same coalesced history model.
 
 ### 2. Prop authoring
 - [x] Add a mouse transform gizmo with translate and rotate modes.

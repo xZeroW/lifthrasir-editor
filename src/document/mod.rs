@@ -98,6 +98,7 @@ impl MapDocument {
         if before == cell {
             return Ok(());
         }
+        self.commit_pending_prop_transform();
         self.collision_cells[index] = cell;
         self.undo.push(DocumentEdit::Collision {
             index,
@@ -143,13 +144,15 @@ impl MapDocument {
         rotation: [f32; 4],
         scale: [f32; 3],
     ) -> Result<()> {
-        let node = self.node_mut(node_index)?;
-        ensure!(
-            node.pointer(&format!("/extras/{}", lif::EXTRAS_PROP))
-                .is_some(),
-            "node {node_index} is not a map prop"
-        );
-        let before = node_transform(node)?;
+        let before = {
+            let node = self.node_mut(node_index)?;
+            ensure!(
+                node.pointer(&format!("/extras/{}", lif::EXTRAS_PROP))
+                    .is_some(),
+                "node {node_index} is not a map prop"
+            );
+            node_transform(node)?
+        };
         let after = NodeTransform {
             translation,
             rotation,
@@ -158,7 +161,8 @@ impl MapDocument {
         if before == after {
             return Ok(());
         }
-        write_node_transform(node, after);
+        self.commit_pending_prop_transform();
+        write_node_transform(self.node_mut(node_index)?, after);
         self.undo.push(DocumentEdit::PropTransform {
             node_index,
             before,
@@ -228,17 +232,19 @@ impl MapDocument {
     }
 
     pub fn set_prop_deleted(&mut self, node_index: usize, deleted: bool) -> Result<()> {
-        self.commit_pending_prop_transform();
-        let node = self.node_mut(node_index)?;
-        ensure!(
-            node.pointer(&format!("/extras/{}", lif::EXTRAS_PROP))
-                .is_some(),
-            "node {node_index} is not a map prop"
-        );
+        {
+            let node = self.node_mut(node_index)?;
+            ensure!(
+                node.pointer(&format!("/extras/{}", lif::EXTRAS_PROP))
+                    .is_some(),
+                "node {node_index} is not a map prop"
+            );
+        }
         let before = self.deleted_props.contains(&node_index);
         if before == deleted {
             return Ok(());
         }
+        self.commit_pending_prop_transform();
         if deleted {
             self.deleted_props.insert(node_index);
         } else {
@@ -706,5 +712,48 @@ mod tests {
             .expect("branch update");
         document.commit_pending_prop_transform();
         assert!(!document.redo(), "a new edit must discard the redo branch");
+    }
+
+    #[test]
+    fn discrete_edits_commit_pending_transform_history_in_order() {
+        let mut map = root(lif::FORMAT_VERSION);
+        map["scenes"] = json!([{ "nodes": [1] }]);
+        let directory = write_document(map);
+        let mut document = MapDocument::open(directory.path().join("map.glb")).expect("document");
+        let original_cell = document.collision_cell(0, 0).expect("cell");
+
+        document
+            .update_prop_transform(1, [1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0; 3])
+            .expect("gesture update");
+        document
+            .set_collision_cell(
+                0,
+                0,
+                LifCollisionCell {
+                    flags: lif::LifCollisionFlags::empty(),
+                    ..original_cell
+                },
+            )
+            .expect("collision edit");
+        document
+            .set_prop_transform(1, [2.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0; 3])
+            .expect("direct transform");
+        document.set_prop_deleted(1, true).expect("delete prop");
+        let duplicate = document.duplicate_prop(1).expect("duplicate prop");
+
+        assert!(document.undo());
+        assert!(document.prop_deleted(duplicate));
+        assert!(document.undo());
+        assert!(!document.prop_deleted(1));
+        assert!(document.undo());
+        assert_eq!(
+            document.prop_transform(1).expect("transform").0,
+            [1.0, 0.0, 0.0]
+        );
+        assert!(document.undo());
+        assert_eq!(document.collision_cell(0, 0), Some(original_cell));
+        assert!(document.undo());
+        assert_eq!(document.prop_transform(1).expect("transform").0, [0.0; 3]);
+        assert!(!document.undo());
     }
 }
