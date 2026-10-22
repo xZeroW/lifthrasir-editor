@@ -1,0 +1,39 @@
+[package]
+name = "lifthrasir-map-editor"
+version = "0.0.1"
+edition = "2024"
+description = "GLB-native map editor for Lifthrasir"
+repository = "https://github.com/xZeroW/lifthrasir-map-editor"
+license-file = "LICENSE"
+
+[features]
+default = ["gui"]
+gui = ["dep:bevy", "dep:dear-imgui-bevy", "dep:dear-imgui-rs", "dep:clap", "dep:lifthrasir-assets", "dep:lifthrasir-runtime", "dep:rfd", "dep:toml"]
+
+[[bin]]
+name = "lifthrasir-map-editor"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[dependencies]
+anyhow = "1.0"
+bevy = { version = "0.19.0", optional = true, features = ["bmp", "bevy_settings", "jpeg", "wayland", "mesh_picking", "bevy_dev_tools", "bevy_gltf", "free_camera", "ktx2", "zstd_rust"] }
+dear-imgui-bevy = { version = "0.19", default-features = false, features = ["render"], optional = true }
+dear-imgui-rs = { version = "0.19", optional = true }
+clap = { version = "4.5", features = ["derive"], optional = true }
+# Keep these at the same revision: the document schema and renderer must agree.
+# No release tag currently contains the editor's shared LIF/scene APIs.
+lifthrasir-data = { git = "https://github.com/xZeroW/lifthrasir", rev = "57d3bc30d6b9f25dfa473b92c839023a475b1878" }
+lifthrasir-assets = { git = "https://github.com/xZeroW/lifthrasir", rev = "57d3bc30d6b9f25dfa473b92c839023a475b1878", optional = true }
+lifthrasir-runtime = { git = "https://github.com/xZeroW/lifthrasir", rev = "57d3bc30d6b9f25dfa473b92c839023a475b1878", optional = true }
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"], optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3"
+toml = { version = "1.1.2", optional = true }
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1

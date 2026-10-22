@@ -1,0 +1,8 @@
+# Copy to assets/loader.toml. Paths are relative to the editor's working directory;
+# archive paths are also searched relative to assets/.
+[assets]
+data_folder = "assets/data"
+
+[[assets.archive]]
+path = "lifthrasir.pak"
+priority = 0
