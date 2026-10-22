@@ -74,13 +74,21 @@ pub(super) fn draw(
         &mut selection_style,
     );
     unsaved_changes_dialog(ui, &mut open_request, &mut open_confirmation);
-    prop_transform_window(ui, &selected, &props, document.as_mut(), &mut snap);
+    prop_transform_window(
+        ui,
+        &mut state,
+        &selected,
+        &props,
+        document.as_mut(),
+        &mut snap,
+    );
     controls_window(ui);
     notice_window(ui, &notice.message);
 }
 
 fn prop_transform_window(
     ui: &Ui,
+    state: &mut EditorUiState,
     selected: &SelectedProp,
     props: &Query<(&LifMapNodeIndex, &Transform, &LifPropRef), With<LifPropRef>>,
     document: Option<&mut ResMut<EditorDocument>>,
@@ -121,6 +129,17 @@ fn prop_transform_window(
             ui.text_wrapped(format!("Model: {}", prop.0.model));
             ui.text(format!("Animation type: {}", prop.0.anim_type));
             ui.text(format!("Animation speed: {:.3}", prop.0.anim_speed));
+            if state.model_node != Some(node.0) {
+                state.model_node = Some(node.0);
+                state.model_path = prop.0.model.clone();
+            }
+            ui.input_text("Replacement model", &mut state.model_path)
+                .build();
+            if ui.button("Replace Model") {
+                if let Err(error) = document.0.replace_prop_model(node.0, &state.model_path) {
+                    error!("replacing prop model: {error:#}");
+                }
+            }
             ui.separator();
             ui.text("Transform");
             let mut translation = transform.translation.to_array();

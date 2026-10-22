@@ -8,6 +8,7 @@ use crate::{
     application::{EditorDocument, EditorNotice, EditorSystems, control_pressed},
     infrastructure::content::{LifMapNodeIndex, LifPropRef, PropSceneContext},
 };
+use lifthrasir_runtime::world::props::MapModel;
 
 #[derive(Resource, Default)]
 pub(crate) struct SelectedProp(pub(crate) Option<Entity>);
@@ -130,13 +131,35 @@ fn delete_selected_prop(
 /// Scene synchronization belongs to presentation, not the history command.
 /// Synchronize every prop so undo does not depend on the current selection.
 fn sync_document_props(
+    mut commands: Commands,
     document: Res<EditorDocument>,
-    mut props: Query<(&mut Transform, &LifMapNodeIndex, &mut Visibility), With<LifPropRef>>,
+    mut props: Query<
+        (
+            Entity,
+            &mut Transform,
+            &LifMapNodeIndex,
+            &mut Visibility,
+            &mut LifPropRef,
+            Option<&Children>,
+        ),
+        With<LifPropRef>,
+    >,
 ) {
     if !document.is_changed() {
         return;
     }
-    for (mut transform, node, mut visibility) in &mut props {
+    for (entity, mut transform, node, mut visibility, mut prop, children) in &mut props {
+        if let Ok(model) = document.0.prop_model_path(node.0)
+            && prop.0.model != model
+        {
+            prop.0.model = model.to_owned();
+            if let Some(children) = children {
+                for child in children.iter() {
+                    commands.entity(child).despawn();
+                }
+            }
+            commands.entity(entity).remove::<MapModel>();
+        }
         if let Ok((translation, rotation, scale)) = document.0.prop_transform(node.0) {
             transform.translation = Vec3::from(translation);
             transform.rotation = Quat::from_array(rotation);

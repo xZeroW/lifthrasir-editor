@@ -92,7 +92,7 @@ items name the work that remains.
 - [x] Add snapping, numeric transform fields, and reset actions. Axis-constrained dragging is implemented.
 - [x] Add prop metadata panel: node name, model path, transform, animation values.
 - [x] Add duplicate prop operations.
-- [ ] Add replace-model operations.
+- [x] Add replace-model operations.
 - [ ] Add a searchable converted-model browser.
 
 ### 3. Terrain and collision

@@ -38,7 +38,7 @@ pub struct MapSceneSummary {
     pub audio_emitters: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum DocumentEdit {
     Collision {
         index: usize,
@@ -54,6 +54,11 @@ enum DocumentEdit {
         node_index: usize,
         before: bool,
         after: bool,
+    },
+    PropModel {
+        node_index: usize,
+        before: String,
+        after: String,
     },
 }
 
@@ -118,7 +123,7 @@ impl MapDocument {
         let Some(edit) = self.undo.pop() else {
             return false;
         };
-        self.apply_edit(edit, false);
+        self.apply_edit(&edit, false);
         self.redo.push(edit);
         self.dirty = true;
         true
@@ -130,7 +135,7 @@ impl MapDocument {
         let Some(edit) = self.redo.pop() else {
             return false;
         };
-        self.apply_edit(edit, true);
+        self.apply_edit(&edit, true);
         self.undo.push(edit);
         self.dirty = true;
         true
@@ -373,6 +378,44 @@ impl MapDocument {
         Ok(node.get("name").and_then(serde_json::Value::as_str))
     }
 
+    /// Returns the converted GLB path referenced by a prop node.
+    pub fn prop_model_path(&self, node_index: usize) -> Result<&str> {
+        let node = self
+            .root
+            .get("nodes")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|nodes| nodes.get(node_index))
+            .with_context(|| format!("map has no node {node_index}"))?;
+        node.pointer(&format!("/extras/{}/model", lif::EXTRAS_PROP))
+            .and_then(serde_json::Value::as_str)
+            .with_context(|| format!("prop node {node_index} has no model path"))
+    }
+
+    /// Replaces a prop's converted model while preserving its transform and
+    /// animation metadata. The operation participates in undo/redo history.
+    pub fn replace_prop_model(
+        &mut self,
+        node_index: usize,
+        model: impl Into<String>,
+    ) -> Result<()> {
+        let model = model.into();
+        ensure!(model.ends_with(".glb"), "prop model must be a .glb path");
+        let before = self.prop_model_path(node_index)?.to_owned();
+        if before == model {
+            return Ok(());
+        }
+        self.commit_pending_prop_transform();
+        self.write_prop_model_path(node_index, &model)?;
+        self.undo.push(DocumentEdit::PropModel {
+            node_index,
+            before,
+            after: model,
+        });
+        self.redo.clear();
+        self.dirty = true;
+        Ok(())
+    }
+
     /// Restores a prop's position from the transform it had when this document
     /// was opened (or when the prop was duplicated).
     pub fn reset_prop_translation(&mut self, node_index: usize) -> Result<()> {
@@ -397,14 +440,14 @@ impl MapDocument {
         self.set_prop_transform(node_index, translation, rotation, initial.scale)
     }
 
-    fn apply_edit(&mut self, edit: DocumentEdit, forward: bool) {
+    fn apply_edit(&mut self, edit: &DocumentEdit, forward: bool) {
         match edit {
             DocumentEdit::Collision {
                 index,
                 before,
                 after,
             } => {
-                self.collision_cells[index] = if forward { after } else { before };
+                self.collision_cells[*index] = if forward { *after } else { *before };
             }
             DocumentEdit::PropTransform {
                 node_index,
@@ -412,20 +455,29 @@ impl MapDocument {
                 after,
             } => {
                 // A history entry was created only after the node was validated.
-                let node = self.node_mut(node_index).expect("history prop node exists");
-                write_node_transform(node, if forward { after } else { before });
+                let node = self
+                    .node_mut(*node_index)
+                    .expect("history prop node exists");
+                write_node_transform(node, if forward { *after } else { *before });
             }
             DocumentEdit::PropDeleted {
                 node_index,
                 before,
                 after,
             } => {
-                if if forward { after } else { before } {
-                    self.deleted_props.insert(node_index);
+                if if forward { *after } else { *before } {
+                    self.deleted_props.insert(*node_index);
                 } else {
-                    self.deleted_props.remove(&node_index);
+                    self.deleted_props.remove(node_index);
                 }
             }
+            DocumentEdit::PropModel {
+                node_index,
+                before,
+                after,
+            } => self
+                .write_prop_model_path(*node_index, if forward { after } else { before })
+                .expect("history prop node exists"),
         }
     }
 
@@ -442,6 +494,17 @@ impl MapDocument {
             .get(&node_index)
             .copied()
             .with_context(|| format!("map has no initial transform for prop node {node_index}"))
+    }
+
+    fn write_prop_model_path(&mut self, node_index: usize, model: &str) -> Result<()> {
+        let node = self.node_mut(node_index)?;
+        ensure!(
+            node.pointer(&format!("/extras/{}", lif::EXTRAS_PROP))
+                .is_some(),
+            "node {node_index} is not a map prop"
+        );
+        node["extras"][lif::EXTRAS_PROP]["model"] = serde_json::json!(model);
+        Ok(())
     }
 }
 
@@ -611,6 +674,32 @@ mod tests {
         assert_eq!(
             document.prop_node_name(1).expect("prop name"),
             Some("town fountain")
+        );
+    }
+
+    #[test]
+    fn replacing_a_prop_model_is_undoable() {
+        let mut map = root(lif::FORMAT_VERSION);
+        map["nodes"][1]["extras"]["lif_prop"]["model"] = json!("ro://models/tree.glb");
+        let directory = write_document(map);
+        let mut document = MapDocument::open(directory.path().join("map.glb")).expect("document");
+
+        document
+            .replace_prop_model(1, "ro://models/fountain.glb")
+            .expect("replace model");
+        assert_eq!(
+            document.prop_model_path(1).expect("model path"),
+            "ro://models/fountain.glb"
+        );
+        assert!(document.undo());
+        assert_eq!(
+            document.prop_model_path(1).expect("model path"),
+            "ro://models/tree.glb"
+        );
+        assert!(document.redo());
+        assert_eq!(
+            document.prop_model_path(1).expect("model path"),
+            "ro://models/fountain.glb"
         );
     }
 

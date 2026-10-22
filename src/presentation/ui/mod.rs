@@ -23,6 +23,8 @@ pub(super) use input::{pointer_captured, viewport_input_allowed};
 #[derive(Resource, Default)]
 struct EditorUiState {
     settings_open: bool,
+    model_node: Option<usize>,
+    model_path: String,
 }
 
 pub(super) struct EditorUiPlugin;
