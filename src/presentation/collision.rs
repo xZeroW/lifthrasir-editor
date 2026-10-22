@@ -172,11 +172,7 @@ fn sync_cursor(
     let Ok(mut transform) = markers.single_mut() else {
         return;
     };
-    transform.translation = Vec3::new(
-        cursor.x as f32 * CELL_SIZE + CELL_SIZE * 0.5,
-        1.5 - cell.height.iter().sum::<f32>() / 4.0,
-        -(cursor.y as f32 * CELL_SIZE + CELL_SIZE * 0.5),
-    );
+    transform.translation = collision_cell_position(cursor.x, cursor.y, cell, 0.0);
 }
 
 fn refresh_collision_overlay(
@@ -218,14 +214,43 @@ fn refresh_collision_overlay(
             commands.spawn((
                 Mesh3d(assets.mesh.clone()),
                 MeshMaterial3d(material),
-                Transform::from_xyz(
-                    x as f32 * CELL_SIZE + CELL_SIZE * 0.5,
-                    // Collision and visual terrain heights are independent.
-                    6.0,
-                    -(y as f32 * CELL_SIZE + CELL_SIZE * 0.5),
-                ),
+                Transform::from_translation(collision_cell_position(x as u32, y as u32, cell, 0.1)),
                 ChildOf(root),
             ));
         }
+    }
+}
+
+/// Converts a GAT/collision cell to the renderer's world convention. GAT is
+/// +Y-down while the renderer is +Y-up, and the converted terrain has a fixed
+/// 1.5-unit lift. Collision cells are five world units wide with +Y rows
+/// running toward -Z.
+fn collision_cell_position(
+    x: u32,
+    y: u32,
+    cell: lifthrasir_map_editor::LifCollisionCell,
+    lift: f32,
+) -> Vec3 {
+    Vec3::new(
+        x as f32 * CELL_SIZE + CELL_SIZE * 0.5,
+        1.5 - cell.height.iter().sum::<f32>() / 4.0 + lift,
+        -(y as f32 * CELL_SIZE + CELL_SIZE * 0.5),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collision_cells_use_gat_world_coordinates_and_height_direction() {
+        let cell = lifthrasir_map_editor::LifCollisionCell {
+            height: [2.0, 4.0, 6.0, 8.0],
+            flags: LifCollisionFlags::WALKABLE,
+        };
+        assert_eq!(
+            collision_cell_position(2, 3, cell, 0.1),
+            Vec3::new(12.5, -3.4, -17.5)
+        );
     }
 }

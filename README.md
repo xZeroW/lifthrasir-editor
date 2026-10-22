@@ -96,7 +96,7 @@ items name the work that remains.
 - [x] Add a searchable converted-model browser.
 
 ### 3. Terrain and collision
-- [ ] Render a reliable collision grid overlay using the map's actual terrain coordinate conversion.
+- [x] Render a reliable collision grid overlay using the map's actual terrain coordinate conversion.
 - [ ] Add brush selection and multi-cell collision editing.
 - [ ] Add terrain height sculpting and regenerate terrain mesh data.
 - [ ] Add terrain texture/material painting and preserve editor-owned terrain data in a new `LIF_editor` schema section.
